@@ -3,7 +3,7 @@
 const WARN_DAYS = 60;   // first email ~2 months before
 const FINAL_DAYS = 7;   // second reminder 1 week before
 const SITE = "https://food.jamietaylor.org";
-const VERSION = "6";
+const VERSION = "7";
 
 export default {
   async fetch(req, env) {
@@ -96,6 +96,19 @@ export default {
         }
 
         if (sub === "/items/delete") { g.items = g.items.filter(i => i.id !== body.id); await putGroup(env, g); return ok(g.items); }
+
+        if (sub === "/items/bulk") {
+          const list = Array.isArray(body.items) ? body.items.slice(0, 300) : [];
+          let added = 0;
+          for (const it of list) {
+            if (!it || !it.name || !/^\d{4}-\d{2}-\d{2}$/.test(it.date || "")) continue;
+            g.items.push({ id: rand(8), name: String(it.name).slice(0, 100), qty: Math.max(1, Math.min(999, Number(it.qty) || 1)),
+              date: it.date, notes: String(it.notes || "").slice(0, 200), by: me.name, w60: false, w7: false });
+            added++;
+          }
+          if (!added) return err("Nothing to add — check the format");
+          await putGroup(env, g); return ok({ added, items: g.items });
+        }
 
         if (sub === "/rename") {
           const name = String(body.name || "").trim().slice(0, 40);
@@ -283,6 +296,26 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
   <input name="date" class="date" type="date" required>
   <input name="notes" class="notes" placeholder="Notes (optional, e.g. top shelf)">
   <button>Add</button></form></div>
+ <div class="card"><h2>📸 Add lots at once from photos</h2>
+  <div class="col">
+   <b>1. What food is it?</b>
+   <input id="bFood" placeholder="e.g. Baked beans">
+   <b>2. Pick all the photos of the dates</b>
+   <input id="bFiles" type="file" accept="image/*" multiple onchange="makeCollage()">
+   <div id="bStatus" class="msg"></div>
+   <canvas id="bCanvas" style="max-width:100%;border-radius:8px;display:none"></canvas>
+   <div class="row" id="bBtns" hidden>
+    <button onclick="copyCollage()">Copy collage</button>
+    <button class="ghost" onclick="downloadCollage()">Download collage</button>
+    <button onclick="copyPrompt()">Copy AI instructions</button>
+   </div>
+   <small>3. Paste the collage <b>and</b> the instructions into another AI (like Claude or ChatGPT). Copy its answer and paste it below.</small>
+   <b>4. Paste the AI's answer</b>
+   <textarea id="bPaste" rows="6" placeholder="Baked beans | 3 | 2028-05-31 | " style="font:inherit;padding:10px;border:1px solid #ccc;border-radius:8px" oninput="previewBulk()"></textarea>
+   <div id="bPreview"></div>
+   <button onclick="addBulk()" id="bAdd" hidden>Add all</button>
+  </div>
+ </div>
  <div class="card"><input id="search" placeholder="Search..." style="width:100%;margin-bottom:10px" oninput="draw()"><div id="list"></div></div>
  <div class="card"><h2>People in this group</h2>
   <div id="members"></div>
@@ -350,6 +383,50 @@ async function leaveGroup(){if(!confirm('Leave this group?'))return;await api('g
 async function deleteGroup(){if(!confirm('Delete this group and its whole food list for everyone?'))return;await api('groups/'+gid+'/delete',{});gid='';start()}
 async function renameGroup(){const n=prompt('New group name',grp.name);if(!n)return;await api('groups/'+gid+'/rename',{name:n});start()}
 async function newGroupPrompt(){const n=prompt('Name for the new group (e.g. Dad\\'s cupboard)');if(!n)return;try{const r=await api('groups',{name:n});gid=r.id;start()}catch(e){alert(e.message)}}
+const NL=String.fromCharCode(10);let bulkRows=[];
+async function loadImg(f){try{return await createImageBitmap(f)}catch(e){return await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=URL.createObjectURL(f)})}}
+async function makeCollage(){const files=[...$('bFiles').files];if(!files.length)return;$('bStatus').textContent='Making collage of '+files.length+' photo(s)...';
+ try{const imgs=[];for(const f of files)imgs.push(await loadImg(f));
+  const n=imgs.length,cols=Math.ceil(Math.sqrt(n)),rows=Math.ceil(n/cols),cell=Math.min(900,Math.floor(3000/cols)),pad=10;
+  const c=$('bCanvas');c.width=cols*cell;c.height=rows*cell;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);
+  imgs.forEach((im,k)=>{const cx=(k%cols)*cell,cy=Math.floor(k/cols)*cell,w=im.width,h=im.height,s=Math.min((cell-pad*2)/w,(cell-pad*2)/h);
+   const dw=w*s,dh=h*s;x.drawImage(im,cx+(cell-dw)/2,cy+(cell-dh)/2,dw,dh);
+   const r=Math.max(22,cell/14);x.fillStyle='#c62828';x.beginPath();x.arc(cx+pad+r,cy+pad+r,r,0,7);x.fill();
+   x.fillStyle='#fff';x.font='bold '+Math.round(r*1.1)+'px sans-serif';x.textAlign='center';x.textBaseline='middle';x.fillText(String(k+1),cx+pad+r,cy+pad+r+1);
+   x.strokeStyle='#ddd';x.strokeRect(cx,cy,cell,cell)});
+  c.style.display='block';$('bBtns').hidden=false;
+  $('bStatus').textContent='Collage ready ('+n+' photos)'+(n>25?'. Tip: with this many photos the dates get small, so you could split them into 2 batches.':'.')}
+ catch(e){$('bStatus').textContent='Couldn\\'t read one of the photos: '+e.message}}
+async function copyCollage(){try{await navigator.clipboard.write([new ClipboardItem({'image/png':new Promise(r=>$('bCanvas').toBlob(r,'image/png'))})]);$('bStatus').textContent='Collage copied! Paste it into the AI.'}
+ catch(e){$('bStatus').textContent='Your browser wouldn\\'t copy the picture, so use Download collage and upload it instead.'}}
+function downloadCollage(){const a=document.createElement('a');a.href=$('bCanvas').toDataURL('image/jpeg',0.9);a.download=(($('bFood').value||'food').replace(/[^a-z0-9]+/gi,'-'))+'-dates.jpg';a.click()}
+function aiPrompt(){const f=$('bFood').value.trim()||'food';return['This picture is a collage of '+$('bFiles').files.length+' numbered photos. Each photo shows the use-by or best-before date printed on the packaging of '+f+'.','',
+ 'Read the date in every photo and reply ONLY with lines in exactly this format, with no other text, headings or tables:',
+ f+' | quantity | YYYY-MM-DD | notes','',
+ 'Rules:','- Make one line for each different date.','- quantity = how many photos show that same date.',
+ '- Write dates as YYYY-MM-DD (year-month-day). If a photo only shows a month and year, use the last day of that month.',
+ '- notes: write which photo numbers that line came from, e.g. photos 1, 4, 7.',
+ '- If you cannot read a date, write a line like: '+f+' | 1 | UNKNOWN | photo 5'].join(NL)}
+async function copyPrompt(){const t=aiPrompt();try{await navigator.clipboard.writeText(t);$('bStatus').textContent='Instructions copied! Paste them into the AI along with the collage.'}
+ catch(e){window.prompt('Copy these instructions:',t)}}
+function normDate(s){s=String(s||'').trim();let m;
+ if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s))return okDate(+s.slice(0,4),+s.slice(5,7),+s.slice(8,10));
+ if(m=s.match(/^([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})$/)){let y=+m[3];if(y<100)y+=2000;return okDate(y,+m[2],+m[1])}
+ if(m=s.match(/^([0-9]{1,2})[./-]([0-9]{4})$/)){const y=+m[2],mo=+m[1];return okDate(y,mo,new Date(Date.UTC(y,mo,0)).getUTCDate())}
+ return null}
+function okDate(y,mo,d){const t=new Date(Date.UTC(y,mo-1,d));if(t.getUTCFullYear()!==y||t.getUTCMonth()!==mo-1||t.getUTCDate()!==d)return null;return t.toISOString().slice(0,10)}
+function previewBulk(){const good=[],bad=[];
+ $('bPaste').value.split(NL).forEach(line=>{let l=line.split(String.fromCharCode(96)).join('').trim().replace(/^[-*>]+/,'').trim();if(!l||l.indexOf('|')<0)return;
+  let p=l.split('|').map(s=>s.trim());if(p[0]==='')p.shift();if(p[p.length-1]==='')p.pop();
+  const date=normDate(p[2]);if(!p[0]||/^-+$/.test(p[0])||/food|name/i.test(p[0])&&!date)return;
+  if(!date){bad.push(l);return}good.push({name:p[0],qty:Math.max(1,parseInt(p[1])||1),date,notes:p.slice(3).join(' | ')})});
+ bulkRows=good;const total=good.reduce((a,b)=>a+b.qty,0);
+ $('bPreview').innerHTML=(good.length?'<p><b>Ready to add '+good.length+' line(s), '+total+' item(s) in total:</b></p>'+good.map(g=>'<div class="item"><div class="grow"><b>'+esc(g.name)+'</b> ×'+g.qty+'<br><small>'+new Date(g.date+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})+(g.notes?' · '+esc(g.notes):'')+'</small></div></div>').join(''):'')+
+  (bad.length?'<p class="bad">Couldn\\'t read a date on '+bad.length+' line(s), these will be skipped:<br>'+bad.map(esc).join('<br>')+'</p>':'');
+ $('bAdd').hidden=!good.length}
+async function addBulk(){try{const r=await api('groups/'+gid+'/items/bulk',{items:bulkRows});grp.items=r.items;draw();
+ $('bPaste').value='';previewBulk();$('bFiles').value='';$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent='Added '+r.added+' line(s) to the list!'}
+ catch(e){alert(e.message)}}
 async function saveAlerts(){await api('settings',{alerts:$('alerts').checked})}
 async function act(p,m){$('msg').textContent='...';try{await api(p,{});$('msg').textContent=m}catch(e){$('msg').textContent='Error: '+e.message}}
 async function logout(){await api('logout',{}).catch(()=>{});showAuth()}
