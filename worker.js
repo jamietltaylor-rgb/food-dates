@@ -1,7 +1,9 @@
 // Food Date Tracker — accounts + groups, Cloudflare Worker
 // Bindings: KV "FOOD". Vars: FROM_EMAIL. Secret: RESEND_KEY (Resend API key)
-const WARN_DAYS = 60;   // first email ~2 months before
-const FINAL_DAYS = 7;   // second reminder 1 week before
+const DEFAULT_WARN = 60;  // start emailing ~2 months before (each person can change this)
+const DEFAULT_EVERY = 7;  // then remind every week until ticked off or muted
+const WARN_CHOICES = [7, 14, 30, 60, 90, 180];
+const EVERY_CHOICES = [1, 3, 7, 14];
 const SITE = "https://food.jamietaylor.org";
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 <rect width="512" height="512" rx="112" fill="#2f5d3a"/>
@@ -23,7 +25,7 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "13";
+const VERSION = "14";
 const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
@@ -84,14 +86,18 @@ export default {
         await env.FOOD.put("sess:" + token, me.email, { expirationTtl: SESSION_TTL }); // keep them logged in
         const groups = [];
         for (const gid of me.groups) { const g = await getGroup(env, gid); if (g) groups.push({ id: g.id, name: g.name, owner: g.owner }); }
-        return ok({ name: me.name, email: me.email, alerts: me.alerts, look: me.look || null, groups });
+        return ok({ name: me.name, email: me.email, alerts: me.alerts, warnDays: me.warnDays || DEFAULT_WARN, every: me.every || DEFAULT_EVERY, look: me.look || null, groups });
       }
 
       if (p === "/api/settings") {
         if ("alerts" in body) me.alerts = !!body.alerts;
+        if (WARN_CHOICES.includes(Number(body.warnDays))) me.warnDays = Number(body.warnDays);
+        if (EVERY_CHOICES.includes(Number(body.every))) me.every = Number(body.every);
         if (body.look && typeof body.look === "object") me.look = { theme: String(body.look.theme || "green").slice(0, 20), mode: String(body.look.mode || "light").slice(0, 10), font: String(body.look.font || "system").slice(0, 20), size: String(body.look.size || "normal").slice(0, 20) };
         await putUser(env, me); return ok({ alerts: me.alerts, look: me.look || null });
       }
+
+      if (p === "/api/remind-me") return ok({ sent: await runReminders(env, me.email) });
 
       if (p === "/api/test-email") {
         await sendMail(env, [me.email], "Food tracker test email", `Hi ${me.name}, if you can read this, email alerts are working.`,
@@ -125,7 +131,7 @@ export default {
         if (sub === "/items") {
           if (!body.name || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || "")) return err("Food name and date needed");
           g.items.push({ id: rand(8), name: String(body.name).slice(0, 100), qty: Math.max(1, Number(body.qty) || 1),
-            date: body.date, notes: String(body.notes || "").slice(0, 200), by: me.name, w60: false, w7: false });
+            date: body.date, notes: String(body.notes || "").slice(0, 200), by: me.name, mutedBy: [], sent: {} });
           await putGroup(env, g); return ok(g.items);
         }
 
@@ -137,7 +143,7 @@ export default {
           for (const it of list) {
             if (!it || !it.name || !/^\d{4}-\d{2}-\d{2}$/.test(it.date || "")) continue;
             g.items.push({ id: rand(8), name: String(it.name).slice(0, 100), qty: Math.max(1, Math.min(999, Number(it.qty) || 1)),
-              date: it.date, notes: String(it.notes || "").slice(0, 200), by: me.name, w60: false, w7: false });
+              date: it.date, notes: String(it.notes || "").slice(0, 200), by: me.name, mutedBy: [], sent: {} });
             added++;
           }
           if (!added) return err("Nothing to add — check the format");
@@ -202,7 +208,13 @@ export default {
           return ok({});
         }
 
-        if (sub === "/check") return ok({ sent: await checkGroup(env, g) });
+        if (sub === "/items/mute") {
+          const it = g.items.find(i => i.id === body.id);
+          if (!it) return err("That food isn't in the list any more");
+          it.mutedBy = (it.mutedBy || []).filter(e => e !== me.email);
+          if (body.mute) it.mutedBy.push(me.email);
+          await putGroup(env, g); return ok(g.items);
+        }
       }
       return err("Not found", 404);
     } catch (e) {
@@ -212,45 +224,73 @@ export default {
 
   async scheduled(event, env, ctx) {
     ctx.waitUntil((async () => {
-      const all = JSON.parse((await env.FOOD.get("groups")) || "[]");
-      for (const gid of all) { const g = await getGroup(env, gid); if (g) await checkGroup(env, g).catch(() => {}); }
+      await runReminders(env);
     })());
   },
 };
 
-async function checkGroup(env, g) {
-  const soon = [], final = [];
-  for (const i of g.items) {
-    const d = daysLeft(i.date);
-    if (d <= FINAL_DAYS && !i.w7) final.push(i);
-    else if (d <= WARN_DAYS && !i.w60) soon.push(i);
+// Daily: for every person, collect food (across all their groups) that's inside their chosen window,
+// not muted by them, and not emailed to them within their repeat gap. One email per person.
+// onlyEmail = run just for one person now ("Send my reminder now"), ignoring the repeat gap.
+async function runReminders(env, onlyEmail) {
+  const today = new Date().toISOString().slice(0, 10);
+  const all = JSON.parse((await env.FOOD.get("groups")) || "[]");
+  const users = {}, perUser = {}, groups = {};
+  for (const gid of all) {
+    const g = await getGroup(env, gid); if (!g) continue; groups[gid] = g;
+    for (const e of g.members) {
+      if (onlyEmail && e !== onlyEmail) continue;
+      if (!(e in users)) users[e] = await getUser(env, e);
+      const u = users[e]; if (!u || (!u.alerts && !onlyEmail)) continue;
+      const warn = u.warnDays || DEFAULT_WARN, every = u.every || DEFAULT_EVERY;
+      for (const i of g.items) {
+        if (daysLeft(i.date) > warn || (i.mutedBy || []).includes(e)) continue;
+        const last = (i.sent || {})[e];
+        if (!onlyEmail && last && (Date.parse(today) - Date.parse(last)) / 864e5 < every) continue;
+        (perUser[e] = perUser[e] || []).push({ g, i });
+      }
+    }
   }
-  if (!soon.length && !final.length) return 0;
-  const to = [];
-  for (const e of g.members) { const u = await getUser(env, e); if (u && u.alerts) to.push(e); }
-  if (!to.length) return 0;
+  let sent = 0;
+  for (const [e, list] of Object.entries(perUser)) {
+    const u = users[e];
+    try { await sendReminder(env, u, list); } catch { continue; }
+    for (const { i } of list) { i.sent = i.sent || {}; i.sent[e] = today; }
+    sent += list.length;
+  }
+  for (const g of Object.values(groups)) if (g.items.some(i => i.sent && Object.values(i.sent).includes(today))) await putGroup(env, g);
+  return sent;
+}
 
+const everyText = n => n === 1 ? "every day" : n === 7 ? "every week" : n === 14 ? "every 2 weeks" : `every ${n} days`;
+const warnText = n => ({ 7: "1 week", 14: "2 weeks", 30: "1 month", 60: "2 months", 90: "3 months", 180: "6 months" }[n] || n + " days");
+
+async function sendReminder(env, u, list) {
+  const warn = u.warnDays || DEFAULT_WARN, every = u.every || DEFAULT_EVERY;
+  const byGroup = new Map();
+  for (const { g, i } of list) { if (!byGroup.has(g.id)) byGroup.set(g.id, { g, items: [] }); byGroup.get(g.id).items.push(i); }
+  const sortD = a => a.sort((x, y) => x.date.localeCompare(y.date));
+  let content = "", text = `Hi ${u.name},\n\n`;
   const line = i => `- ${i.name} (x${i.qty}) — use by ${fmt(i.date)} (${label(daysLeft(i.date))})${i.notes ? " — " + i.notes : ""}`;
-  let body = `Food alert for "${g.name}":\n\n`;
-  if (final.length) body += "USE THIS WEEK:\n" + final.map(line).join("\n") + "\n\n";
-  if (soon.length) body += "Going out of date in the next 2 months:\n" + soon.map(line).join("\n") + "\n\n";
-  body += `See everything: ${SITE}`;
-  const n = soon.length + final.length;
+  let anyUrgent = false;
+  for (const { g, items } of byGroup.values()) {
+    const gone = sortD(items.filter(i => daysLeft(i.date) < 0)), week = sortD(items.filter(i => daysLeft(i.date) >= 0 && daysLeft(i.date) <= 7)), later = sortD(items.filter(i => daysLeft(i.date) > 7));
+    if (gone.length || week.length) anyUrgent = true;
+    if (byGroup.size > 1) content += `<h2 style="margin:18px 0 6px;font-size:17px;color:#2f5d3a">${h(g.name)}</h2>`;
+    content += emailItems("Already out of date", "#8e1b1b", gone) + emailItems("Use this week", "#c62828", week) + emailItems(`Within ${warnText(warn)}`, "#b77900", later);
+    text += `${g.name}:\n` + [...gone, ...week, ...later].map(line).join("\n") + "\n\n";
+  }
+  const n = list.length, names = [...byGroup.values()].map(x => x.g.name);
+  text += `You'll get a reminder ${everyText(every)} until each item is ticked off as eaten or muted.\nOpen the tracker: ${SITE}`;
   const html = emailLayout({
-    preheader: `${n} item(s) in ${g.name} going out of date soon`,
-    heading: final.length ? "Some food needs using this week" : "Food going out of date soon",
-    intro: `Here's what's coming up in <b>${h(g.name)}</b>.`,
-    content: emailItems("Use this week", "#c62828", final) + emailItems("In the next 2 months", "#b77900", soon),
+    preheader: `${n} item(s) to use soon`,
+    heading: anyUrgent ? "Some food needs using now" : "Food to use soon",
+    intro: `Hi ${h(u.name)}, here's what's coming up in <b>${names.map(h).join("</b> and <b>")}</b>.`,
+    content,
     button: { label: "Open the food tracker", url: SITE },
-    footer: `You're getting this because you're in the "${h(g.name)}" group. You can turn these emails off in Settings.`,
+    footer: `You'll get this ${everyText(every)} until each item is ticked off as eaten, or you tap 🔕 on it in the tracker. You can change how early and how often in Settings.`,
   });
-  await sendMail(env, to, `Food alert: ${n} item(s) going out of date (${g.name})`, body, html);
-
-  // only mark as warned once the email has gone
-  for (const i of final) { i.w7 = true; i.w60 = true; }
-  for (const i of soon) i.w60 = true;
-  await putGroup(env, g);
-  return soon.length + final.length;
+  await sendMail(env, [u.email], `Food reminder: ${n} item(s) to use soon`, text, html);
 }
 
 async function sendMail(env, to, subject, text, html) {
@@ -386,7 +426,7 @@ details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.he
  </div>
  <div class="tabs"><button data-tab="food" onclick="showTab('food')">🥫 Food</button><button data-tab="add" onclick="showTab('add')">➕ Add</button><button data-tab="group" onclick="showTab('group')">👥 Group</button><button data-tab="settings" onclick="showTab('settings')">⚙️ Settings</button></div>
  <section data-tab="food">
- <div class="card stats"><div class="stat"><b id="sTotal">0</b>items</div><div class="stat"><b id="sSoon">0</b>within 2 months</div><div class="stat"><b id="sGone">0</b>expired</div></div>
+ <div class="card stats"><div class="stat"><b id="sTotal">0</b>items</div><div class="stat"><b id="sSoon">0</b><span id="sSoonLbl">within 2 months</span></div><div class="stat"><b id="sGone">0</b>expired</div></div>
  <div class="card"><input id="search" placeholder="Search..." style="width:100%;margin-bottom:10px" oninput="draw()"><div id="list"></div></div>
  </section>
  <section data-tab="add" hidden>
@@ -436,8 +476,15 @@ details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.he
  </div>
  <div class="card"><h2>My settings</h2>
   <label class="row"><input type="checkbox" id="alerts" onchange="saveAlerts()"> Email me when food is going out of date</label>
+  <div class="look">
+  <label for="warnSel">Start emailing me when food is within</label>
+  <select id="warnSel" style="width:100%" onchange="saveRemind()"><option value="7">1 week</option><option value="14">2 weeks</option><option value="30">1 month</option><option value="60">2 months</option><option value="90">3 months</option><option value="180">6 months</option></select>
+  <label for="everySel">Then remind me</label>
+  <select id="everySel" style="width:100%" onchange="saveRemind()"><option value="1">Every day</option><option value="3">Every 3 days</option><option value="7">Every week</option><option value="14">Every 2 weeks</option></select>
+  </div>
+  <small>Reminders keep coming until you tick the food off as eaten (✓ Eaten), or tap 🔕 on it to stop emails for just that one.</small>
   <div class="row" style="margin-top:10px"><button class="ghost" onclick="act('test-email','Test email sent — check your inbox')">Send me a test email</button>
-  <button class="ghost" onclick="act('groups/'+gid+'/check','Checked dates')">Check dates now</button>
+  <button class="ghost" onclick="act('remind-me','Reminder sent, if anything is due')">Send my reminder now</button>
   <button class="ghost" onclick="logout()">Log out</button></div><div class="msg" id="msg"></div>
  </div>
  </section>
@@ -480,18 +527,18 @@ function swapAuth(){signup=!signup;$('aName').hidden=!signup;$('authTitle').text
  $('authSwapText').textContent=signup?'Already have an account?':'No account yet?';$('authSwap').textContent=signup?'Log in':'Sign up';$('authErr').textContent=''}
 async function doAuth(){try{const d=await api(signup?'signup':'login',{name:$('aName').value,email:$('aEmail').value,password:$('aPw').value});
  tok=d.token;localStorage.setItem('ftok',tok);$('aPw').value='';start()}catch(e){$('authErr').textContent=e.message}}
-async function start(){showTab(localStorage.getItem('ftab')||'food');me=await api('me');$('auth').hidden=true;$('app').hidden=false;$('who').textContent=me.name;if(me.look){look=me.look;applyLook()}else if(look.theme||look.font||look.size)api('settings',{look}).catch(()=>{});$('alerts').checked=me.alerts;
+async function start(){showTab(localStorage.getItem('ftab')||'food');me=await api('me');$('auth').hidden=true;$('app').hidden=false;$('who').textContent=me.name;if(me.look){look=me.look;applyLook()}else if(look.theme||look.font||look.size)api('settings',{look}).catch(()=>{});$('alerts').checked=me.alerts;$('warnSel').value=me.warnDays;$('everySel').value=me.every;
  if(!me.groups.find(g=>g.id===gid))gid=me.groups[0]?me.groups[0].id:'';drawGroups();if(gid)openGroup(gid)}
 function drawGroups(){$('groupSel').innerHTML=me.groups.map(g=>'<option value="'+g.id+'"'+(g.id===gid?' selected':'')+'>'+esc(g.name)+'</option>').join('')||'<option>No groups yet</option>'}
 async function openGroup(id){gid=id;localStorage.setItem('fgid',id);grp=await api('groups/'+id);draw();drawMembers()}
 function draw(){if(!grp)return;const q=$('search').value.toLowerCase();const items=grp.items;
  const s=[...items].sort((a,b)=>a.date.localeCompare(b.date));let soon=0,gone=0;
  $('list').innerHTML=s.filter(i=>i.name.toLowerCase().includes(q)).map(i=>{const d=days(i.date);
-  const c=d<0?'gone':d<=7?'week':d<=60?'soon':'';
+  const c=d<0?'gone':d<=7?'week':d<=warnD()?'soon':'';const muted=(i.mutedBy||[]).includes(me.email);
   const l=d<0?'Expired '+(-d)+' days ago':d===0?'Today!':d+' days left';
   const date=new Date(i.date+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
-  return '<div class="item '+c+'"><div class="grow"><b>'+esc(i.name)+'</b> ×'+i.qty+'<br><small>'+date+' · '+l+(i.notes?' · '+esc(i.notes):'')+(i.by?' · added by '+esc(i.by):'')+'</small></div><button class="del" data-id="'+i.id+'" onclick="delItem(this.dataset.id)">Used</button></div>'}).join('')||'<p>No food added yet.</p>';
- items.forEach(i=>{const d=days(i.date);if(d<0)gone++;else if(d<=60)soon++});
+  return '<div class="item '+c+'"><div class="grow"><b>'+esc(i.name)+'</b> ×'+i.qty+'<br><small>'+date+' · '+l+(i.notes?' · '+esc(i.notes):'')+(i.by?' · added by '+esc(i.by):'')+(muted?' · <b>emails off</b>':'')+'</small></div><button class="del" title="'+(muted?'Turn emails back on for this':'Stop emails for this')+'" data-id="'+i.id+'" onclick="muteItem(this.dataset.id,'+(!muted)+')">'+(muted?'🔕':'🔔')+'</button><button class="del" data-id="'+i.id+'" onclick="delItem(this.dataset.id)">✓ Eaten</button></div>'}).join('')||'<p>No food added yet.</p>';
+ items.forEach(i=>{const d=days(i.date);if(d<0)gone++;else if(d<=warnD())soon++});$('sSoonLbl').textContent='within '+WARNTXT[warnD()];
  sTotal.textContent=items.length;sSoon.textContent=soon;sGone.textContent=gone}
 function drawMembers(){const owner=grp.owner===me.email;
  $('members').innerHTML=grp.members.map(m=>'<div class="item person"><div class="grow"><b>'+esc(m.name)+'</b>'+(m.owner?'<span class="tag">owner</span>':'')+'<br><small>'+esc(m.email)+'</small></div>'+
@@ -501,7 +548,7 @@ function drawMembers(){const owner=grp.owner===me.email;
  $('leaveBtn').hidden=owner;$('delBtn').hidden=!owner}
 $('f').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);
  try{grp.items=await api('groups/'+gid+'/items',Object.fromEntries(f));e.target.reset();e.target.qty.value=1;draw();toast('✓ Added')}catch(x){uiAlert(x.message)}};
-async function delItem(id){grp.items=await api('groups/'+gid+'/items/delete',{id});draw();toast('✓ Marked as used')}
+async function delItem(id){grp.items=await api('groups/'+gid+'/items/delete',{id});draw();toast('✓ Ticked off as eaten')}
 async function addMember(){const el=$('addEm');try{const r=await api('groups/'+gid+'/members',{email:el.value});
  $('gMsg').textContent=(r.joined?'Added! ':'Invited — they\\'ll join when they sign up. ')+(r.emailed?'They\\'ve been emailed.':'(Couldn\\'t send them an email.)');el.value='';openGroup(gid)}catch(e){$('gMsg').textContent=e.message}}
 async function removeMember(e){if(!await uiConfirm('Remove '+e+' from this group?','Remove',true))return;await api('groups/'+gid+'/members/remove',{email:e});openGroup(gid)}
@@ -603,6 +650,10 @@ function previewBulk(){const good=[],bad=[];
 async function addBulk(){try{const r=await api('groups/'+gid+'/items/bulk',{items:bulkRows});grp.items=r.items;draw();
  $('bPaste').value='';previewBulk();photos=[];drawThumbs();$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent='Added '+r.added+' line(s) to the list!';toast('✓ Added '+r.added+' line(s)');showTab('food')}
  catch(e){uiAlert(e.message)}}
+const WARNTXT={7:'1 week',14:'2 weeks',30:'1 month',60:'2 months',90:'3 months',180:'6 months'};
+function warnD(){return (me&&me.warnDays)||60}
+async function saveRemind(){me.warnDays=+$('warnSel').value;me.every=+$('everySel').value;await api('settings',{warnDays:me.warnDays,every:me.every});draw();toast('✓ Saved')}
+async function muteItem(id,mute){grp.items=await api('groups/'+gid+'/items/mute',{id,mute});draw();toast(mute?'🔕 Emails off for that one':'🔔 Emails back on for that one')}
 async function saveAlerts(){await api('settings',{alerts:$('alerts').checked})}
 async function act(p,m){$('msg').textContent='...';try{await api(p,{});$('msg').textContent=m}catch(e){$('msg').textContent='Error: '+e.message}}
 async function logout(){await api('logout',{}).catch(()=>{});showAuth()}
