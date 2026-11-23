@@ -25,7 +25,7 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "15";
+const VERSION = "16";
 const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
@@ -101,7 +101,7 @@ export default {
 
       if (p === "/api/test-email") {
         await sendMail(env, [me.email], "Food tracker test email", `Hi ${me.name}, if you can read this, email alerts are working.`,
-          emailLayout({ preheader: "Your email alerts are working", heading: `Hi ${me.name}, it works! ✅`,
+          emailLayout({ preheader: "Your email alerts are working", heading: `Hi ${me.name}, your email alerts are working`,
             intro: "This is a test email from the Food Date Tracker. When food in your groups is about 2 months from going out of date, and again a week before, you'll get an email like this:",
             content: emailItems("Example", "#b77900", [{ name: "Baked beans", qty: 3, date: new Date(Date.now() + 45 * 864e5).toISOString().slice(0, 10), notes: "Top shelf" }]),
             button: { label: "Open the food tracker", url: SITE }, footer: "You asked for this test email from Settings." }));
