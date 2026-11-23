@@ -23,7 +23,8 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "10";
+const VERSION = "11";
+const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
   async fetch(req, env) {
@@ -80,12 +81,17 @@ export default {
       if (p === "/api/logout") { await env.FOOD.delete("sess:" + token); return ok({}); }
 
       if (p === "/api/me") {
+        await env.FOOD.put("sess:" + token, me.email, { expirationTtl: SESSION_TTL }); // keep them logged in
         const groups = [];
         for (const gid of me.groups) { const g = await getGroup(env, gid); if (g) groups.push({ id: g.id, name: g.name, owner: g.owner }); }
-        return ok({ name: me.name, email: me.email, alerts: me.alerts, groups });
+        return ok({ name: me.name, email: me.email, alerts: me.alerts, look: me.look || null, groups });
       }
 
-      if (p === "/api/settings") { me.alerts = !!body.alerts; await putUser(env, me); return ok({ alerts: me.alerts }); }
+      if (p === "/api/settings") {
+        if ("alerts" in body) me.alerts = !!body.alerts;
+        if (body.look && typeof body.look === "object") me.look = { theme: String(body.look.theme || "green").slice(0, 20), font: String(body.look.font || "system").slice(0, 20), size: String(body.look.size || "normal").slice(0, 20) };
+        await putUser(env, me); return ok({ alerts: me.alerts, look: me.look || null });
+      }
 
       if (p === "/api/test-email") {
         await sendMail(env, [me.email], "Food tracker test", `Hi ${me.name}, if you can read this, email alerts are working.`);
@@ -256,7 +262,7 @@ async function newGroup(env, name, owner) {
 }
 async function newSession(env, email) {
   const t = rand(24);
-  await env.FOOD.put("sess:" + t, email, { expirationTtl: 60 * 60 * 24 * 60 });
+  await env.FOOD.put("sess:" + t, email, { expirationTtl: SESSION_TTL });
   return t;
 }
 function rand(n) { return [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, "0")).join(""); }
@@ -279,29 +285,32 @@ const HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta n
 <meta name="theme-color" content="#2f5d3a"><meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Food Dates"><meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#f4f1ea;color:#222}
-header{background:#2f5d3a;color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{margin:0;font-size:22px;flex:1}
+*{box-sizing:border-box}
+:root{--main:#2f5d3a;--bg:#f4f1ea;--card:#fff;--text:#222;--muted:#666;--soft:#e6efe8;--line:#ccc;--item:#fafafa;--ghost:#eee;--soon:#fff8e6;--week:#fff0e3;--gone:#fdecec;--font:system-ui,sans-serif;--fs:16px}
+.swatches{display:flex;gap:8px;flex-wrap:wrap}.swatch{width:auto;padding:8px 12px;border-radius:20px;border:3px solid transparent;color:#fff;font-weight:600}
+.swatch.on{border-color:var(--text)}.look label{display:block;margin:12px 0 6px;font-weight:600}body{margin:0;font-family:var(--font);font-size:var(--fs);background:var(--bg);color:var(--text)}
+header{background:var(--main);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{margin:0;font-size:22px;flex:1}
 header small{opacity:.85}
 main{max-width:760px;margin:0 auto;padding:16px}
-.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px #0002}
+.card{background:var(--card);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px #0002}
 .card h2{margin:0 0 10px;font-size:17px}
 form.add{display:grid;grid-template-columns:2fr 70px 1fr;gap:8px}form.add .notes{grid-column:1/3}
-input,button,select{font:inherit;padding:10px;border:1px solid #ccc;border-radius:8px}
-button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{background:#eee;color:#222}button.link{background:none;color:#2f5d3a;padding:4px;text-decoration:underline}
-.item{display:flex;align-items:center;gap:12px;padding:10px;border-radius:8px;margin-bottom:6px;border-left:6px solid #3a9d4f;background:#fafafa}
-.item.soon{border-color:#e0a100;background:#fff8e6}.item.week{border-color:#e06100;background:#fff0e3}.item.gone{border-color:#c62828;background:#fdecec}
+input,button,select,textarea{font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text)}
+button{background:var(--main);color:#fff;border:0;cursor:pointer}button.ghost{background:var(--ghost);color:var(--text)}button.link{background:none;color:var(--main);padding:4px;text-decoration:underline}
+.item{display:flex;align-items:center;gap:12px;padding:10px;border-radius:8px;margin-bottom:6px;border-left:6px solid #3a9d4f;background:var(--item)}
+.item.soon{border-color:#e0a100;background:var(--soon)}.item.week{border-color:#e06100;background:var(--week)}.item.gone{border-color:#c62828;background:var(--gone)}
 .item.person{border-color:#7a8ca0}
-.item .grow{flex:1}.item small{color:#666}.del{background:#ddd;color:#333;padding:6px 10px}
+.item .grow{flex:1}.item small{color:var(--muted)}.del{background:var(--ghost);color:var(--text);padding:6px 10px}
 .stats{display:flex;gap:10px;flex-wrap:wrap}.stat{flex:1;min-width:110px;text-align:center}.stat b{display:block;font-size:24px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.col{display:flex;flex-direction:column;gap:8px}
-.msg{color:#2f5d3a;margin-top:8px}.bad{color:#c62828}
-.tag{font-size:12px;background:#e6efe8;color:#2f5d3a;padding:2px 8px;border-radius:10px;margin-left:6px}
-.tabs{position:sticky;top:0;z-index:10;display:flex;gap:4px;background:#f4f1ea;padding:6px 0 10px}
-.tabs button{flex:1;background:#fff;color:#2f5d3a;border:1px solid #cfd8d1;padding:10px 4px;font-weight:600;font-size:15px}
-.tabs button.on{background:#2f5d3a;color:#fff;border-color:#2f5d3a}
-details.help{max-width:760px;margin:10px auto;text-align:left;background:#fff;border-radius:12px;padding:12px 16px;box-shadow:0 1px 3px #0002}
-details.help summary{cursor:pointer;font-weight:600;color:#2f5d3a}details.help h3{margin:14px 0 6px;font-size:15px}details.help ol{margin:0;padding-left:20px;line-height:1.6}
-.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:#fff;border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2f5d3a;color:#fff;padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
+.msg{color:var(--main);margin-top:8px}.bad{color:#c62828}
+.tag{font-size:12px;background:var(--soft);color:var(--main);padding:2px 8px;border-radius:10px;margin-left:6px}
+.tabs{position:sticky;top:0;z-index:10;display:flex;gap:4px;background:var(--bg);padding:6px 0 10px}
+.tabs button{flex:1;background:var(--card);color:var(--main);border:1px solid var(--line);padding:10px 4px;font-weight:600;font-size:15px}
+.tabs button.on{background:var(--main);color:#fff;border-color:var(--main)}
+details.help{max-width:760px;margin:10px auto;text-align:left;background:var(--card);border-radius:12px;padding:12px 16px;box-shadow:0 1px 3px #0002}
+details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.help h3{margin:14px 0 6px;font-size:15px}details.help ol{margin:0;padding-left:20px;line-height:1.6}
+.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--main);color:#fff;padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
 </style></head><body>
 <header><img src="/icon-192.png" alt="" width="36" height="36" style="border-radius:8px"><h1>Food Date Tracker</h1><small id="who"></small></header><main>
 
@@ -349,7 +358,7 @@ details.help summary{cursor:pointer;font-weight:600;color:#2f5d3a}details.help h
    </div>
    <small>3. Paste the collage <b>and</b> the instructions into another AI (like Claude or ChatGPT). Copy its answer and paste it below.</small>
    <b>4. Paste the AI's answer</b>
-   <textarea id="bPaste" rows="6" placeholder="Baked beans | 3 | 2028-05-31 | " style="font:inherit;padding:10px;border:1px solid #ccc;border-radius:8px" oninput="previewBulk()"></textarea>
+   <textarea id="bPaste" rows="6" placeholder="Baked beans | 3 | 2028-05-31 | "  oninput="previewBulk()"></textarea>
    <div id="bPreview"></div>
    <button onclick="addBulk()" id="bAdd" hidden>Add all</button>
   </div>
@@ -365,6 +374,12 @@ details.help summary{cursor:pointer;font-weight:600;color:#2f5d3a}details.help h
  </div>
  </section>
  <section data-tab="settings" hidden>
+ <div class="card look"><h2>Look and feel</h2>
+  <label>Colour scheme</label><div class="swatches" id="swatches"></div>
+  <label for="fontSel">Font</label><select id="fontSel" onchange="setLook('font',this.value)" style="width:100%"></select>
+  <label for="sizeSel">Text size</label><select id="sizeSel" onchange="setLook('size',this.value)" style="width:100%"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option><option value="xl">Extra large</option></select>
+  <small>Your choices are saved to your account, so they follow you onto other devices.</small>
+ </div>
  <div class="card"><h2>My settings</h2>
   <label class="row"><input type="checkbox" id="alerts" onchange="saveAlerts()"> Email me when food is going out of date</label>
   <div class="row" style="margin-top:10px"><button class="ghost" onclick="act('test-email','Test email sent — check your inbox')">Send me a test email</button>
@@ -378,7 +393,7 @@ details.help summary{cursor:pointer;font-weight:600;color:#2f5d3a}details.help h
  <div class="row"><button class="ghost" id="mCancel">Cancel</button><button id="mOk">OK</button></div></div></div>
 <div class="toast" id="toast" hidden></div>
 </main>
-<footer style="text-align:center;padding:10px 16px 30px;color:#666">
+<footer style="text-align:center;padding:10px 16px 30px;color:var(--muted)">
  <details class="help"><summary>📱 How to add this to your home screen</summary>
   <p>Adding it to your home screen makes it open like an app, with the tin logo.</p>
   <button id="installBtn" hidden onclick="doInstall()">Install the app</button>
@@ -411,7 +426,7 @@ function swapAuth(){signup=!signup;$('aName').hidden=!signup;$('authTitle').text
  $('authSwapText').textContent=signup?'Already have an account?':'No account yet?';$('authSwap').textContent=signup?'Log in':'Sign up';$('authErr').textContent=''}
 async function doAuth(){try{const d=await api(signup?'signup':'login',{name:$('aName').value,email:$('aEmail').value,password:$('aPw').value});
  tok=d.token;localStorage.setItem('ftok',tok);$('aPw').value='';start()}catch(e){$('authErr').textContent=e.message}}
-async function start(){showTab(localStorage.getItem('ftab')||'food');me=await api('me');$('auth').hidden=true;$('app').hidden=false;$('who').textContent=me.name;$('alerts').checked=me.alerts;
+async function start(){showTab(localStorage.getItem('ftab')||'food');me=await api('me');$('auth').hidden=true;$('app').hidden=false;$('who').textContent=me.name;if(me.look){look=me.look;applyLook()}else if(look.theme||look.font||look.size)api('settings',{look}).catch(()=>{});$('alerts').checked=me.alerts;
  if(!me.groups.find(g=>g.id===gid))gid=me.groups[0]?me.groups[0].id:'';drawGroups();if(gid)openGroup(gid)}
 function drawGroups(){$('groupSel').innerHTML=me.groups.map(g=>'<option value="'+g.id+'"'+(g.id===gid?' selected':'')+'>'+esc(g.name)+'</option>').join('')||'<option>No groups yet</option>'}
 async function openGroup(id){gid=id;localStorage.setItem('fgid',id);grp=await api('groups/'+id);draw();drawMembers()}
@@ -440,6 +455,27 @@ async function leaveGroup(){if(!await uiConfirm('Leave this group? You will stop
 async function deleteGroup(){if(!await uiConfirm('Delete this group and its whole food list for everyone? This cannot be undone.','Delete',true))return;await api('groups/'+gid+'/delete',{});gid='';start()}
 async function renameGroup(){if(!grp)return;const n=await uiPrompt('Rename group',grp.name,'Group name');if(!n||n===grp.name)return;try{await api('groups/'+gid+'/rename',{name:n});await start();toast('✓ Group renamed')}catch(e){uiAlert(e.message)}}
 async function newGroupPrompt(){const n=await uiPrompt('New group','','e.g. Dad\\'s cupboard','Create');if(!n)return;try{const r=await api('groups',{name:n});gid=r.id;await start();toast('✓ Group created')}catch(e){uiAlert(e.message)}}
+const THEMES={green:{name:'Green',main:'#2f5d3a',bg:'#f4f1ea',soft:'#e6efe8'},blue:{name:'Blue',main:'#1f5f8b',bg:'#eef3f8',soft:'#e1ecf5'},
+ purple:{name:'Purple',main:'#5b3f8c',bg:'#f3f0f8',soft:'#ebe4f5'},red:{name:'Red',main:'#a63a2b',bg:'#f8f1ee',soft:'#f5e3df'},
+ pink:{name:'Pink',main:'#b03a78',bg:'#faf0f5',soft:'#f6e1ec'},orange:{name:'Orange',main:'#b8560f',bg:'#fbf3ea',soft:'#f7e6d4'},
+ grey:{name:'Grey',main:'#4a5560',bg:'#f1f2f3',soft:'#e3e6e9'},
+ dark:{name:'Dark',main:'#4fa36a',bg:'#15181a',card:'#22272a',text:'#eeeeee',muted:'#a8b0b5',soft:'#2d3a31',line:'#454c50',item:'#2a2f32',ghost:'#353b3f',soon:'#3d3420',week:'#40291c',gone:'#432425'}};
+const FONTS={system:['Standard','system-ui,sans-serif'],rounded:['Rounded','ui-rounded,"SF Pro Rounded","Nunito","Varela Round",system-ui,sans-serif'],
+ serif:['Classic (serif)','Georgia,"Times New Roman",serif'],comic:['Fun','"Comic Sans MS","Chalkboard SE","Comic Neue",cursive'],
+ mono:['Typewriter','ui-monospace,"SF Mono",Menlo,Consolas,monospace'],big:['Easy read','Verdana,Tahoma,sans-serif']};
+const SIZES={small:'14px',normal:'16px',large:'18px',xl:'21px'};
+const LIGHT={card:'#fff',text:'#222',muted:'#666',line:'#ccc',item:'#fafafa',ghost:'#eee',soon:'#fff8e6',week:'#fff0e3',gone:'#fdecec'};
+let look=(()=>{try{return JSON.parse(localStorage.getItem('flook'))||{}}catch(e){return{}}})();
+function applyLook(){const t=Object.assign({},LIGHT,THEMES[look.theme]||THEMES.green),r=document.documentElement.style;
+ for(const k of ['main','bg','card','text','muted','soft','line','item','ghost','soon','week','gone'])r.setProperty('--'+k,t[k]);
+ r.setProperty('--font',(FONTS[look.font]||FONTS.system)[1]);r.setProperty('--fs',SIZES[look.size]||SIZES.normal);
+ document.querySelector('meta[name=theme-color]').content=t.main;localStorage.setItem('flook',JSON.stringify(look));drawLook()}
+function drawLook(){const sw=document.getElementById('swatches');if(!sw)return;
+ sw.innerHTML=Object.entries(THEMES).map(([k,t])=>'<button class="swatch'+((look.theme||'green')===k?' on':'')+'" style="background:'+t.main+'" onclick="setLook(&quot;theme&quot;,&quot;'+k+'&quot;)">'+t.name+'</button>').join('');
+ const fs=document.getElementById('fontSel');if(!fs.options.length)fs.innerHTML=Object.entries(FONTS).map(([k,f])=>'<option value="'+k+'" style="font-family:'+f[1].replace(/"/g,'')+'">'+f[0]+'</option>').join('');
+ fs.value=look.font||'system';document.getElementById('sizeSel').value=look.size||'normal'}
+function setLook(k,v){look[k]=v;applyLook();if(tok)api('settings',{look}).then(()=>toast('✓ Saved')).catch(()=>{})}
+applyLook();
 const NL=String.fromCharCode(10);let bulkRows=[],photos=[];
 function modal(o){return new Promise(res=>{$('mTitle').textContent=o.title||'';$('mText').textContent=o.text||'';$('mText').hidden=!o.text;
  const inp=$('mInput'),ar=$('mArea');inp.hidden=!o.input;ar.hidden=!o.area;inp.value=o.value||'';inp.placeholder=o.placeholder||'';ar.value=o.area||'';
@@ -502,5 +538,5 @@ async function addBulk(){try{const r=await api('groups/'+gid+'/items/bulk',{item
 async function saveAlerts(){await api('settings',{alerts:$('alerts').checked})}
 async function act(p,m){$('msg').textContent='...';try{await api(p,{});$('msg').textContent=m}catch(e){$('msg').textContent='Error: '+e.message}}
 async function logout(){await api('logout',{}).catch(()=>{});showAuth()}
-if(tok)start().catch(()=>showAuth());else showAuth();
+if(tok){$('auth').hidden=true;start().catch(e=>{if(tok){$('who').textContent='Offline, retrying...';setTimeout(()=>location.reload(),8000)}})}else showAuth();
 </script></body></html>`;
