@@ -18,5 +18,4 @@ id = "3112216cc5084db281f5a921e3c25fdb"
 
 [vars]
 FROM_EMAIL = "food@alerts.jamietaylor.org"
-TO_EMAIL = "jamietltaylor@talktalk.net"
-# PASSWORD is a secret set in the Cloudflare dashboard
+# RESEND_KEY is a secret set in the Cloudflare dashboard
