@@ -23,7 +23,7 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "12";
+const VERSION = "13";
 const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
@@ -94,7 +94,11 @@ export default {
       }
 
       if (p === "/api/test-email") {
-        await sendMail(env, [me.email], "Food tracker test", `Hi ${me.name}, if you can read this, email alerts are working.`);
+        await sendMail(env, [me.email], "Food tracker test email", `Hi ${me.name}, if you can read this, email alerts are working.`,
+          emailLayout({ preheader: "Your email alerts are working", heading: `Hi ${me.name}, it works! ✅`,
+            intro: "This is a test email from the Food Date Tracker. When food in your groups is about 2 months from going out of date, and again a week before, you'll get an email like this:",
+            content: emailItems("Example", "#b77900", [{ name: "Baked beans", qty: 3, date: new Date(Date.now() + 45 * 864e5).toISOString().slice(0, 10), notes: "Top shelf" }]),
+            button: { label: "Open the food tracker", url: SITE }, footer: "You asked for this test email from Settings." }));
         return ok({});
       }
 
@@ -163,7 +167,13 @@ export default {
             ? `${me.name} added you to the "${g.name}" group on the food tracker.\n\nLog in to see it: ${SITE}`
             : `${me.name} invited you to the "${g.name}" group on the food tracker, to keep track of food use-by dates.\n\nMake an account with this email address to join: ${SITE}`;
           let emailed = true;
-          try { await sendMail(env, [e], `${me.name} added you to "${g.name}"`, msg); } catch { emailed = false; }
+          const html = emailLayout({ preheader: `${me.name} shared a food list with you`,
+            heading: u ? `You've been added to "${g.name}"` : `${me.name} invited you to "${g.name}"`,
+            intro: u ? `<b>${h(me.name)}</b> added you to the <b>${h(g.name)}</b> group, so you can see its food list and get reminders before things go out of date.`
+                     : `<b>${h(me.name)}</b> wants to share the <b>${h(g.name)}</b> food list with you. It keeps track of use-by dates and emails everyone in the group before food goes out of date.<br><br>Make a free account using <b>${h(e)}</b> and you'll join the group straight away.`,
+            button: { label: u ? "Open the food tracker" : "Make my account", url: SITE },
+            footer: `${h(me.name)} added this email address. If you weren't expecting this, you can ignore it.` });
+          try { await sendMail(env, [e], `${me.name} added you to "${g.name}"`, msg, html); } catch { emailed = false; }
           return ok({ joined: !!u, emailed });
         }
 
@@ -225,7 +235,16 @@ async function checkGroup(env, g) {
   if (final.length) body += "USE THIS WEEK:\n" + final.map(line).join("\n") + "\n\n";
   if (soon.length) body += "Going out of date in the next 2 months:\n" + soon.map(line).join("\n") + "\n\n";
   body += `See everything: ${SITE}`;
-  await sendMail(env, to, `Food alert: ${soon.length + final.length} item(s) going out of date (${g.name})`, body);
+  const n = soon.length + final.length;
+  const html = emailLayout({
+    preheader: `${n} item(s) in ${g.name} going out of date soon`,
+    heading: final.length ? "Some food needs using this week" : "Food going out of date soon",
+    intro: `Here's what's coming up in <b>${h(g.name)}</b>.`,
+    content: emailItems("Use this week", "#c62828", final) + emailItems("In the next 2 months", "#b77900", soon),
+    button: { label: "Open the food tracker", url: SITE },
+    footer: `You're getting this because you're in the "${h(g.name)}" group. You can turn these emails off in Settings.`,
+  });
+  await sendMail(env, to, `Food alert: ${n} item(s) going out of date (${g.name})`, body, html);
 
   // only mark as warned once the email has gone
   for (const i of final) { i.w7 = true; i.w60 = true; }
@@ -234,18 +253,48 @@ async function checkGroup(env, g) {
   return soon.length + final.length;
 }
 
-async function sendMail(env, to, subject, text) {
+async function sendMail(env, to, subject, text, html) {
   if (!env.RESEND_KEY) throw new Error("Email sending isn't switched on yet (RESEND_KEY missing)");
   const failed = [];
   for (const addr of to) {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${env.RESEND_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from: `Food Tracker <${env.FROM_EMAIL}>`, to: [addr], subject, text }),
+      body: JSON.stringify(Object.assign({ from: `Food Date Tracker <${env.FROM_EMAIL}>`, to: [addr], subject, text }, html ? { html } : {})),
     });
     if (!r.ok) failed.push(`${addr}: ${(await r.text()).slice(0, 150)}`);
   }
   if (failed.length === to.length) throw new Error("Couldn't send email — " + failed.join("; "));
+}
+
+// ---- email design ----
+const h = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function emailLayout({ preheader = "", heading, intro = "", content = "", button, footer = "" }) {
+  const btn = button ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 4px"><tr><td style="background:#2f5d3a;border-radius:8px">
+    <a href="${h(button.url)}" style="display:inline-block;padding:13px 26px;color:#ffffff;font-weight:bold;text-decoration:none;font-size:15px">${h(button.label)}</a></td></tr></table>` : "";
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>${h(heading)}</title></head>
+<body style="margin:0;padding:0;background:#f4f1ea;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:#222">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">${h(preheader)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f1ea"><tr><td align="center" style="padding:24px 12px">
+ <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+  <tr><td style="background:#2f5d3a;padding:18px 24px">
+   <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    <td style="padding-right:12px"><img src="${SITE}/icon-192.png" width="44" height="44" alt="Food Date Tracker" style="display:block;border-radius:10px;border:0"></td>
+    <td style="color:#ffffff;font-size:20px;font-weight:bold">Food Date Tracker</td></tr></table></td></tr>
+  <tr><td style="padding:26px 24px 8px">
+   <h1 style="margin:0 0 10px;font-size:22px;line-height:1.3;color:#222">${h(heading)}</h1>
+   ${intro ? `<p style="margin:0 0 16px;font-size:15px;line-height:1.55;color:#444">${intro}</p>` : ""}
+   ${content}${btn}</td></tr>
+  <tr><td style="padding:18px 24px 24px;font-size:12px;line-height:1.5;color:#888;border-top:1px solid #eee">${footer}<br>Food Date Tracker · <a href="${SITE}" style="color:#2f5d3a">food.jamietaylor.org</a></td></tr>
+ </table></td></tr></table></body></html>`;
+}
+function emailItems(title, colour, items) {
+  if (!items.length) return "";
+  const rows = items.map(i => { const d = daysLeft(i.date); return `<tr>
+    <td style="padding:10px 12px;border-bottom:1px solid #eee;font-size:15px"><b>${h(i.name)}</b> <span style="color:#666">×${h(i.qty)}</span>${i.notes ? `<br><span style="font-size:13px;color:#888">${h(i.notes)}</span>` : ""}</td>
+    <td style="padding:10px 12px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap;font-size:14px"><b>${h(fmt(i.date))}</b><br><span style="font-size:13px;color:${colour}">${h(label(d))}</span></td></tr>`; }).join("");
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:6px 0 18px;border:1px solid #eee;border-left:5px solid ${colour};border-radius:8px;border-collapse:separate">
+    <tr><td colspan="2" style="padding:10px 12px;background:#fafafa;font-weight:bold;font-size:14px;color:${colour};text-transform:uppercase;letter-spacing:.4px">${h(title)}</td></tr>${rows}</table>`;
 }
 
 // ---- storage helpers ----
