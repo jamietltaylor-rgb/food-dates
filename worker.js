@@ -25,7 +25,7 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "14";
+const VERSION = "15";
 const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
@@ -300,7 +300,8 @@ async function sendMail(env, to, subject, text, html) {
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${env.RESEND_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify(Object.assign({ from: `Food Date Tracker <${env.FROM_EMAIL}>`, to: [addr], subject, text }, html ? { html } : {})),
+      body: JSON.stringify(Object.assign({ from: `Food Date Tracker <${env.FROM_EMAIL}>`, to: [addr], subject, text },
+        html ? { html, attachments: [{ filename: "food-tracker-logo.png", content: PNG["/icon-192.png"], content_id: "foodlogo", content_type: "image/png" }] } : {})),
     });
     if (!r.ok) failed.push(`${addr}: ${(await r.text()).slice(0, 150)}`);
   }
@@ -319,7 +320,7 @@ function emailLayout({ preheader = "", heading, intro = "", content = "", button
  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
   <tr><td style="background:#2f5d3a;padding:18px 24px">
    <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-    <td style="padding-right:12px"><img src="${SITE}/icon-192.png" width="44" height="44" alt="Food Date Tracker" style="display:block;border-radius:10px;border:0"></td>
+    <td style="padding-right:12px"><img src="cid:foodlogo" width="44" height="44" alt="Food Date Tracker" style="display:block;border-radius:10px;border:0"></td>
     <td style="color:#ffffff;font-size:20px;font-weight:bold">Food Date Tracker</td></tr></table></td></tr>
   <tr><td style="padding:26px 24px 8px">
    <h1 style="margin:0 0 10px;font-size:22px;line-height:1.3;color:#222">${h(heading)}</h1>
@@ -483,7 +484,7 @@ details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.he
   <select id="everySel" style="width:100%" onchange="saveRemind()"><option value="1">Every day</option><option value="3">Every 3 days</option><option value="7">Every week</option><option value="14">Every 2 weeks</option></select>
   </div>
   <small>Reminders keep coming until you tick the food off as eaten (✓ Eaten), or tap 🔕 on it to stop emails for just that one.</small>
-  <div class="row" style="margin-top:10px"><button class="ghost" onclick="act('test-email','Test email sent — check your inbox')">Send me a test email</button>
+  <div class="row" style="margin-top:10px"><button class="ghost" onclick="act('test-email','Test email sent, check your inbox (and Junk folder)')">Send me a test email</button>
   <button class="ghost" onclick="act('remind-me','Reminder sent, if anything is due')">Send my reminder now</button>
   <button class="ghost" onclick="logout()">Log out</button></div><div class="msg" id="msg"></div>
  </div>
@@ -655,7 +656,7 @@ function warnD(){return (me&&me.warnDays)||60}
 async function saveRemind(){me.warnDays=+$('warnSel').value;me.every=+$('everySel').value;await api('settings',{warnDays:me.warnDays,every:me.every});draw();toast('✓ Saved')}
 async function muteItem(id,mute){grp.items=await api('groups/'+gid+'/items/mute',{id,mute});draw();toast(mute?'🔕 Emails off for that one':'🔔 Emails back on for that one')}
 async function saveAlerts(){await api('settings',{alerts:$('alerts').checked})}
-async function act(p,m){$('msg').textContent='...';try{await api(p,{});$('msg').textContent=m}catch(e){$('msg').textContent='Error: '+e.message}}
+async function act(p,m){$('msg').textContent='Sending...';try{await api(p,{});$('msg').textContent=m;toast('✓ '+m)}catch(e){$('msg').textContent='Error: '+e.message;uiAlert(e.message,'That didn'+String.fromCharCode(39)+'t work')}}
 async function logout(){await api('logout',{}).catch(()=>{});showAuth()}
 if(tok){$('auth').hidden=true;start().catch(e=>{if(tok){$('who').textContent='Offline, retrying...';setTimeout(()=>location.reload(),8000)}})}else showAuth();
 </script></body></html>`;
