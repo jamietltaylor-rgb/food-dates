@@ -23,7 +23,7 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "11";
+const VERSION = "12";
 const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
@@ -89,7 +89,7 @@ export default {
 
       if (p === "/api/settings") {
         if ("alerts" in body) me.alerts = !!body.alerts;
-        if (body.look && typeof body.look === "object") me.look = { theme: String(body.look.theme || "green").slice(0, 20), font: String(body.look.font || "system").slice(0, 20), size: String(body.look.size || "normal").slice(0, 20) };
+        if (body.look && typeof body.look === "object") me.look = { theme: String(body.look.theme || "green").slice(0, 20), mode: String(body.look.mode || "light").slice(0, 10), font: String(body.look.font || "system").slice(0, 20), size: String(body.look.size || "normal").slice(0, 20) };
         await putUser(env, me); return ok({ alerts: me.alerts, look: me.look || null });
       }
 
@@ -286,17 +286,21 @@ const HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta n
 <meta name="apple-mobile-web-app-title" content="Food Dates"><meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
 *{box-sizing:border-box}
-:root{--main:#2f5d3a;--bg:#f4f1ea;--card:#fff;--text:#222;--muted:#666;--soft:#e6efe8;--line:#ccc;--item:#fafafa;--ghost:#eee;--soon:#fff8e6;--week:#fff0e3;--gone:#fdecec;--font:system-ui,sans-serif;--fs:16px}
+:root{--main:#2f5d3a;--bg:#f4f1ea;--card:#fff;--text:#222;--muted:#666;--soft:#e6efe8;--line:#ccc;--item:#fafafa;--ghost:#eee;--soon:#fff8e6;--week:#fff0e3;--gone:#fdecec;--font:system-ui,sans-serif;--fs:16px;--on:#fff;--head:#2f5d3a;--headtext:#fff}
 .swatches{display:flex;gap:8px;flex-wrap:wrap}.swatch{width:auto;padding:8px 12px;border-radius:20px;border:3px solid transparent;color:#fff;font-weight:600}
-.swatch.on{border-color:var(--text)}.look label{display:block;margin:12px 0 6px;font-weight:600}body{margin:0;font-family:var(--font);font-size:var(--fs);background:var(--bg);color:var(--text)}
-header{background:var(--main);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{margin:0;font-size:22px;flex:1}
+.swatch.on{border-color:var(--text);box-shadow:0 0 0 2px var(--card) inset}
+.fonts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.fontbtn{background:var(--item);color:var(--text);border:3px solid var(--line);border-radius:12px;padding:10px;text-align:left}
+.fontbtn b{display:block;font-size:1.05em}.fontbtn span{font-size:.85em;color:var(--muted)}.fontbtn.on{border-color:var(--main)}
+.modes{display:flex;gap:8px;flex-wrap:wrap}.modes button{flex:1;background:var(--item);color:var(--text);border:3px solid var(--line)}.modes button.on{border-color:var(--main)}.look label{display:block;margin:12px 0 6px;font-weight:600}body{margin:0;font-family:var(--font);font-size:var(--fs);background:var(--bg);color:var(--text)}
+header{background:var(--head);color:var(--headtext);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{margin:0;font-size:22px;flex:1}
 header small{opacity:.85}
 main{max-width:760px;margin:0 auto;padding:16px}
 .card{background:var(--card);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 3px #0002}
 .card h2{margin:0 0 10px;font-size:17px}
 form.add{display:grid;grid-template-columns:2fr 70px 1fr;gap:8px}form.add .notes{grid-column:1/3}
 input,button,select,textarea{font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text)}
-button{background:var(--main);color:#fff;border:0;cursor:pointer}button.ghost{background:var(--ghost);color:var(--text)}button.link{background:none;color:var(--main);padding:4px;text-decoration:underline}
+button{background:var(--main);color:var(--on);border:0;cursor:pointer}button.ghost{background:var(--ghost);color:var(--text)}button.link{background:none;color:var(--main);padding:4px;text-decoration:underline}
 .item{display:flex;align-items:center;gap:12px;padding:10px;border-radius:8px;margin-bottom:6px;border-left:6px solid #3a9d4f;background:var(--item)}
 .item.soon{border-color:#e0a100;background:var(--soon)}.item.week{border-color:#e06100;background:var(--week)}.item.gone{border-color:#c62828;background:var(--gone)}
 .item.person{border-color:#7a8ca0}
@@ -307,10 +311,10 @@ button{background:var(--main);color:#fff;border:0;cursor:pointer}button.ghost{ba
 .tag{font-size:12px;background:var(--soft);color:var(--main);padding:2px 8px;border-radius:10px;margin-left:6px}
 .tabs{position:sticky;top:0;z-index:10;display:flex;gap:4px;background:var(--bg);padding:6px 0 10px}
 .tabs button{flex:1;background:var(--card);color:var(--main);border:1px solid var(--line);padding:10px 4px;font-weight:600;font-size:15px}
-.tabs button.on{background:var(--main);color:#fff;border-color:var(--main)}
+.tabs button.on{background:var(--main);color:var(--on);border-color:var(--main)}
 details.help{max-width:760px;margin:10px auto;text-align:left;background:var(--card);border-radius:12px;padding:12px 16px;box-shadow:0 1px 3px #0002}
 details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.help h3{margin:14px 0 6px;font-size:15px}details.help ol{margin:0;padding-left:20px;line-height:1.6}
-.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--main);color:#fff;padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
+.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--main);color:var(--on);padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
 </style></head><body>
 <header><img src="/icon-192.png" alt="" width="36" height="36" style="border-radius:8px"><h1>Food Date Tracker</h1><small id="who"></small></header><main>
 
@@ -375,8 +379,9 @@ details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.he
  </section>
  <section data-tab="settings" hidden>
  <div class="card look"><h2>Look and feel</h2>
-  <label>Colour scheme</label><div class="swatches" id="swatches"></div>
-  <label for="fontSel">Font</label><select id="fontSel" onchange="setLook('font',this.value)" style="width:100%"></select>
+  <label>Light or dark</label><div class="modes" id="modes"></div>
+  <label>Colour</label><div class="swatches" id="swatches"></div>
+  <label>Font</label><div class="fonts" id="fonts"></div>
   <label for="sizeSel">Text size</label><select id="sizeSel" onchange="setLook('size',this.value)" style="width:100%"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option><option value="xl">Extra large</option></select>
   <small>Your choices are saved to your account, so they follow you onto other devices.</small>
  </div>
@@ -455,25 +460,39 @@ async function leaveGroup(){if(!await uiConfirm('Leave this group? You will stop
 async function deleteGroup(){if(!await uiConfirm('Delete this group and its whole food list for everyone? This cannot be undone.','Delete',true))return;await api('groups/'+gid+'/delete',{});gid='';start()}
 async function renameGroup(){if(!grp)return;const n=await uiPrompt('Rename group',grp.name,'Group name');if(!n||n===grp.name)return;try{await api('groups/'+gid+'/rename',{name:n});await start();toast('✓ Group renamed')}catch(e){uiAlert(e.message)}}
 async function newGroupPrompt(){const n=await uiPrompt('New group','','e.g. Dad\\'s cupboard','Create');if(!n)return;try{const r=await api('groups',{name:n});gid=r.id;await start();toast('✓ Group created')}catch(e){uiAlert(e.message)}}
-const THEMES={green:{name:'Green',main:'#2f5d3a',bg:'#f4f1ea',soft:'#e6efe8'},blue:{name:'Blue',main:'#1f5f8b',bg:'#eef3f8',soft:'#e1ecf5'},
- purple:{name:'Purple',main:'#5b3f8c',bg:'#f3f0f8',soft:'#ebe4f5'},red:{name:'Red',main:'#a63a2b',bg:'#f8f1ee',soft:'#f5e3df'},
- pink:{name:'Pink',main:'#b03a78',bg:'#faf0f5',soft:'#f6e1ec'},orange:{name:'Orange',main:'#b8560f',bg:'#fbf3ea',soft:'#f7e6d4'},
- grey:{name:'Grey',main:'#4a5560',bg:'#f1f2f3',soft:'#e3e6e9'},
- dark:{name:'Dark',main:'#4fa36a',bg:'#15181a',card:'#22272a',text:'#eeeeee',muted:'#a8b0b5',soft:'#2d3a31',line:'#454c50',item:'#2a2f32',ghost:'#353b3f',soon:'#3d3420',week:'#40291c',gone:'#432425'}};
-const FONTS={system:['Standard','system-ui,sans-serif'],rounded:['Rounded','ui-rounded,"SF Pro Rounded","Nunito","Varela Round",system-ui,sans-serif'],
- serif:['Classic (serif)','Georgia,"Times New Roman",serif'],comic:['Fun','"Comic Sans MS","Chalkboard SE","Comic Neue",cursive'],
- mono:['Typewriter','ui-monospace,"SF Mono",Menlo,Consolas,monospace'],big:['Easy read','Verdana,Tahoma,sans-serif']};
+const THEMES={green:{name:'Green',main:'#2f5d3a',bg:'#f4f1ea',soft:'#e6efe8',mainD:'#5cb87a',bgD:'#121714',softD:'#24342a'},
+ blue:{name:'Blue',main:'#1f5f8b',bg:'#eef3f8',soft:'#e1ecf5',mainD:'#5aa7e0',bgD:'#11161b',softD:'#21303d'},
+ teal:{name:'Teal',main:'#1f7a74',bg:'#eef6f5',soft:'#dcefed',mainD:'#45c4b8',bgD:'#111918',softD:'#203836'},
+ purple:{name:'Purple',main:'#5b3f8c',bg:'#f3f0f8',soft:'#ebe4f5',mainD:'#a88be0',bgD:'#15131b',softD:'#312a42'},
+ red:{name:'Red',main:'#a63a2b',bg:'#f8f1ee',soft:'#f5e3df',mainD:'#ee7a68',bgD:'#1a1413',softD:'#402a26'},
+ pink:{name:'Pink',main:'#b03a78',bg:'#faf0f5',soft:'#f6e1ec',mainD:'#ee82b4',bgD:'#1a1318',softD:'#402836'},
+ orange:{name:'Orange',main:'#b8560f',bg:'#fbf3ea',soft:'#f7e6d4',mainD:'#f29a4a',bgD:'#1a1511',softD:'#402f20'},
+ grey:{name:'Grey',main:'#4a5560',bg:'#f1f2f3',soft:'#e3e6e9',mainD:'#a7b3bf',bgD:'#141617',softD:'#2c3236'}};
+const FONTS={system:['Standard','system-ui,sans-serif'],rounded:['Rounded','ui-rounded,"SF Pro Rounded","Nunito","Varela Round","Arial Rounded MT Bold",system-ui,sans-serif'],
+ serif:['Classic','Georgia,"Times New Roman",serif'],comic:['Fun','"Comic Sans MS","Chalkboard SE","Comic Neue",cursive'],
+ mono:['Typewriter','ui-monospace,"SF Mono",Menlo,Consolas,"Courier New",monospace'],easy:['Easy read','Verdana,Tahoma,sans-serif'],
+ bold:['Chunky','"Arial Black","Helvetica Neue",Impact,sans-serif'],hand:['Handwritten','"Bradley Hand","Segoe Print","Marker Felt","Brush Script MT",cursive']};
 const SIZES={small:'14px',normal:'16px',large:'18px',xl:'21px'};
-const LIGHT={card:'#fff',text:'#222',muted:'#666',line:'#ccc',item:'#fafafa',ghost:'#eee',soon:'#fff8e6',week:'#fff0e3',gone:'#fdecec'};
+const LIGHT={card:'#fff',text:'#222',muted:'#666',line:'#ccc',item:'#fafafa',ghost:'#eee',soon:'#fff8e6',week:'#fff0e3',gone:'#fdecec',on:'#fff'};
+const DARK={card:'#1f2427',text:'#eeeeee',muted:'#a8b0b5',line:'#3f464a',item:'#262c2f',ghost:'#33393d',soon:'#3d3420',week:'#40291c',gone:'#432425',on:'#111'};
+const MODES={light:'☀️ Light',dark:'🌙 Dark',auto:'📱 Match my phone'};
 let look=(()=>{try{return JSON.parse(localStorage.getItem('flook'))||{}}catch(e){return{}}})();
-function applyLook(){const t=Object.assign({},LIGHT,THEMES[look.theme]||THEMES.green),r=document.documentElement.style;
- for(const k of ['main','bg','card','text','muted','soft','line','item','ghost','soon','week','gone'])r.setProperty('--'+k,t[k]);
- r.setProperty('--font',(FONTS[look.font]||FONTS.system)[1]);r.setProperty('--fs',SIZES[look.size]||SIZES.normal);
- document.querySelector('meta[name=theme-color]').content=t.main;localStorage.setItem('flook',JSON.stringify(look));drawLook()}
-function drawLook(){const sw=document.getElementById('swatches');if(!sw)return;
- sw.innerHTML=Object.entries(THEMES).map(([k,t])=>'<button class="swatch'+((look.theme||'green')===k?' on':'')+'" style="background:'+t.main+'" onclick="setLook(&quot;theme&quot;,&quot;'+k+'&quot;)">'+t.name+'</button>').join('');
- const fs=document.getElementById('fontSel');if(!fs.options.length)fs.innerHTML=Object.entries(FONTS).map(([k,f])=>'<option value="'+k+'" style="font-family:'+f[1].replace(/"/g,'')+'">'+f[0]+'</option>').join('');
- fs.value=look.font||'system';document.getElementById('sizeSel').value=look.size||'normal'}
+const darkMQ=window.matchMedia?matchMedia('(prefers-color-scheme: dark)'):null;
+if(darkMQ&&darkMQ.addEventListener)darkMQ.addEventListener('change',()=>{if(look.mode==='auto')applyLook()});
+function fixLook(){if(look.theme==='dark'){look.theme='green';look.mode='dark'}if(look.font==='big')look.font='easy';if(!THEMES[look.theme])look.theme='green';if(!MODES[look.mode])look.mode='light';if(!FONTS[look.font])look.font='system'}
+function isDark(){return look.mode==='dark'||(look.mode==='auto'&&darkMQ&&darkMQ.matches)}
+function applyLook(){fixLook();const th=THEMES[look.theme],d=isDark(),r=document.documentElement.style;
+ const v=Object.assign({},d?DARK:LIGHT,{main:d?th.mainD:th.main,bg:d?th.bgD:th.bg,soft:d?th.softD:th.soft,head:d?th.softD:th.main,headtext:d?'#f2f2f2':'#fff'});
+ for(const k in v)r.setProperty('--'+k,v[k]);
+ r.setProperty('--font',FONTS[look.font][1]);r.setProperty('--fs',SIZES[look.size]||SIZES.normal);
+ r.colorScheme=d?'dark':'light';document.querySelector('meta[name=theme-color]').content=v.head;
+ localStorage.setItem('flook',JSON.stringify(look));drawLook()}
+function q(v){return '&quot;'+v+'&quot;'}
+function drawLook(){const sw=document.getElementById('swatches');if(!sw)return;const d=isDark();
+ document.getElementById('modes').innerHTML=Object.entries(MODES).map(([k,n])=>'<button class="'+(look.mode===k?'on':'')+'" onclick="setLook('+q('mode')+','+q(k)+')">'+n+'</button>').join('');
+ sw.innerHTML=Object.entries(THEMES).map(([k,t])=>'<button class="swatch'+(look.theme===k?' on':'')+'" style="background:'+(d?t.mainD:t.main)+';color:'+(d?'#111':'#fff')+'" onclick="setLook('+q('theme')+','+q(k)+')">'+t.name+'</button>').join('');
+ document.getElementById('fonts').innerHTML=Object.entries(FONTS).map(([k,f])=>'<button class="fontbtn'+(look.font===k?' on':'')+'" style="font-family:'+f[1].replace(/"/g,'')+'" onclick="setLook('+q('font')+','+q(k)+')"><b>'+f[0]+'</b><span>Baked beans · 31 May 2028</span></button>').join('');
+ document.getElementById('sizeSel').value=look.size||'normal'}
 function setLook(k,v){look[k]=v;applyLook();if(tok)api('settings',{look}).then(()=>toast('✓ Saved')).catch(()=>{})}
 applyLook();
 const NL=String.fromCharCode(10);let bulkRows=[],photos=[];
