@@ -3,12 +3,14 @@
 const WARN_DAYS = 60;   // first email ~2 months before
 const FINAL_DAYS = 7;   // second reminder 1 week before
 const SITE = "https://food.jamietaylor.org";
+const VERSION = "6";
 
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const p = url.pathname;
-    if (p === "/") return new Response(HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
+    if (p === "/api/version") return new Response(JSON.stringify({ version: VERSION }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+    if (p === "/") return new Response(HTML.replaceAll("__VERSION__", VERSION), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
     if (!p.startsWith("/api/")) return new Response("Not found", { status: 404 });
     try {
       const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
@@ -297,7 +299,17 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
  </div>
 </div>
 </main>
+<footer style="text-align:center;padding:10px 16px 30px;color:#666">
+ <button class="ghost" onclick="checkUpdates()">Check for updates</button>
+ <div id="upd" style="margin-top:8px;font-size:14px">Version __VERSION__</div>
+</footer>
 <script>
+const MY_VERSION='__VERSION__';
+async function checkUpdates(){const u=document.getElementById('upd');u.textContent='Checking...';
+ try{const r=await fetch('/api/version?t='+Date.now(),{cache:'no-store'}).then(r=>r.json());
+  if(r.version!==MY_VERSION){u.textContent='Updating to version '+r.version+'...';setTimeout(()=>location.replace('/?v='+r.version),600)}
+  else u.textContent='You\\'re on the latest version (version '+MY_VERSION+')'}
+ catch(e){u.textContent='Couldn\\'t check for updates, try again'}}
 let tok=localStorage.getItem('ftok')||'',me=null,gid=localStorage.getItem('fgid')||'',grp=null,signup=false;
 const $=id=>document.getElementById(id);
 const api=(p,b)=>fetch('/api/'+p,{method:b?'POST':'GET',headers:{'content-type':'application/json',authorization:'Bearer '+tok},body:b&&JSON.stringify(b)})
