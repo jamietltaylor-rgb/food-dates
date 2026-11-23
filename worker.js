@@ -3,7 +3,7 @@
 const WARN_DAYS = 60;   // first email ~2 months before
 const FINAL_DAYS = 7;   // second reminder 1 week before
 const SITE = "https://food.jamietaylor.org";
-const VERSION = "7";
+const VERSION = "8";
 
 export default {
   async fetch(req, env) {
@@ -268,7 +268,7 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.col{display:flex;flex-direction:column;gap:8px}
 .msg{color:#2f5d3a;margin-top:8px}.bad{color:#c62828}
 .tag{font-size:12px;background:#e6efe8;color:#2f5d3a;padding:2px 8px;border-radius:10px;margin-left:6px}
-@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
+.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:#fff;border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2f5d3a;color:#fff;padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
 </style></head><body>
 <header><h1>🥫 Food Date Tracker</h1><small id="who"></small></header><main>
 
@@ -287,7 +287,7 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
 <div id="app" hidden>
  <div class="card row">
   <select id="groupSel" onchange="openGroup(this.value)" style="flex:1"></select>
-  <button class="ghost" onclick="newGroupPrompt()">+ New group</button>
+  <button class="ghost" onclick="renameGroup()">✏️ Rename</button><button class="ghost" onclick="newGroupPrompt()">+ New group</button>
  </div>
  <div class="card stats"><div class="stat"><b id="sTotal">0</b>items</div><div class="stat"><b id="sSoon">0</b>within 2 months</div><div class="stat"><b id="sGone">0</b>expired</div></div>
  <div class="card"><h2>Add food</h2><form class="add" id="f">
@@ -301,13 +301,13 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
    <b>1. What food is it?</b>
    <input id="bFood" placeholder="e.g. Baked beans">
    <b>2. Pick all the photos of the dates</b>
-   <input id="bFiles" type="file" accept="image/*" multiple onchange="makeCollage()">
+   <input id="bCam" type="file" accept="image/*" capture="environment" hidden onchange="addPhotos(this)"><input id="bGal" type="file" accept="image/*" multiple hidden onchange="addPhotos(this)"><div class="row"><button type="button" onclick="$('bCam').click()">📷 Take photo</button><button type="button" onclick="$('bGal').click()">🖼️ Choose from gallery</button><button type="button" class="ghost" onclick="clearPhotos()" id="bClear" hidden>Clear photos</button></div><div class="thumbs" id="bThumbs"></div>
    <div id="bStatus" class="msg"></div>
    <canvas id="bCanvas" style="max-width:100%;border-radius:8px;display:none"></canvas>
    <div class="row" id="bBtns" hidden>
-    <button onclick="copyCollage()">Copy collage</button>
+    <button onclick="copyCollage(this)">Copy collage</button>
     <button class="ghost" onclick="downloadCollage()">Download collage</button>
-    <button onclick="copyPrompt()">Copy AI instructions</button>
+    <button onclick="copyPrompt(this)">Copy AI instructions</button>
    </div>
    <small>3. Paste the collage <b>and</b> the instructions into another AI (like Claude or ChatGPT). Copy its answer and paste it below.</small>
    <b>4. Paste the AI's answer</b>
@@ -331,6 +331,10 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
   <button class="ghost" onclick="logout()">Log out</button></div><div class="msg" id="msg"></div>
  </div>
 </div>
+<div class="modal" id="modal" hidden><div class="mbox"><h3 id="mTitle"></h3><p id="mText"></p>
+ <input id="mInput" hidden><textarea id="mArea" rows="8" hidden readonly></textarea>
+ <div class="row"><button class="ghost" id="mCancel">Cancel</button><button id="mOk">OK</button></div></div></div>
+<div class="toast" id="toast" hidden></div>
 </main>
 <footer style="text-align:center;padding:10px 16px 30px;color:#666">
  <button class="ghost" onclick="checkUpdates()">Check for updates</button>
@@ -374,18 +378,33 @@ function drawMembers(){const owner=grp.owner===me.email;
   (owner?'<button class="del" data-e="'+esc(e)+'" onclick="removeMember(this.dataset.e)">Cancel</button>':'')+'</div>').join('');
  $('leaveBtn').hidden=owner;$('delBtn').hidden=!owner}
 $('f').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);
- try{grp.items=await api('groups/'+gid+'/items',Object.fromEntries(f));e.target.reset();e.target.qty.value=1;draw()}catch(x){alert(x.message)}};
-async function delItem(id){grp.items=await api('groups/'+gid+'/items/delete',{id});draw()}
+ try{grp.items=await api('groups/'+gid+'/items',Object.fromEntries(f));e.target.reset();e.target.qty.value=1;draw();toast('✓ Added')}catch(x){uiAlert(x.message)}};
+async function delItem(id){grp.items=await api('groups/'+gid+'/items/delete',{id});draw();toast('✓ Marked as used')}
 async function addMember(){const el=$('addEm');try{const r=await api('groups/'+gid+'/members',{email:el.value});
  $('gMsg').textContent=(r.joined?'Added! ':'Invited — they\\'ll join when they sign up. ')+(r.emailed?'They\\'ve been emailed.':'(Couldn\\'t send them an email.)');el.value='';openGroup(gid)}catch(e){$('gMsg').textContent=e.message}}
-async function removeMember(e){if(!confirm('Remove '+e+' from this group?'))return;await api('groups/'+gid+'/members/remove',{email:e});openGroup(gid)}
-async function leaveGroup(){if(!confirm('Leave this group?'))return;await api('groups/'+gid+'/members/remove',{email:me.email});gid='';start()}
-async function deleteGroup(){if(!confirm('Delete this group and its whole food list for everyone?'))return;await api('groups/'+gid+'/delete',{});gid='';start()}
-async function renameGroup(){const n=prompt('New group name',grp.name);if(!n)return;await api('groups/'+gid+'/rename',{name:n});start()}
-async function newGroupPrompt(){const n=prompt('Name for the new group (e.g. Dad\\'s cupboard)');if(!n)return;try{const r=await api('groups',{name:n});gid=r.id;start()}catch(e){alert(e.message)}}
-const NL=String.fromCharCode(10);let bulkRows=[];
+async function removeMember(e){if(!await uiConfirm('Remove '+e+' from this group?','Remove',true))return;await api('groups/'+gid+'/members/remove',{email:e});openGroup(gid)}
+async function leaveGroup(){if(!await uiConfirm('Leave this group? You will stop seeing its food list.','Leave',true))return;await api('groups/'+gid+'/members/remove',{email:me.email});gid='';start()}
+async function deleteGroup(){if(!await uiConfirm('Delete this group and its whole food list for everyone? This cannot be undone.','Delete',true))return;await api('groups/'+gid+'/delete',{});gid='';start()}
+async function renameGroup(){if(!grp)return;const n=await uiPrompt('Rename group',grp.name,'Group name');if(!n||n===grp.name)return;try{await api('groups/'+gid+'/rename',{name:n});await start();toast('✓ Group renamed')}catch(e){uiAlert(e.message)}}
+async function newGroupPrompt(){const n=await uiPrompt('New group','','e.g. Dad\\'s cupboard','Create');if(!n)return;try{const r=await api('groups',{name:n});gid=r.id;await start();toast('✓ Group created')}catch(e){uiAlert(e.message)}}
+const NL=String.fromCharCode(10);let bulkRows=[],photos=[];
+function modal(o){return new Promise(res=>{$('mTitle').textContent=o.title||'';$('mText').textContent=o.text||'';$('mText').hidden=!o.text;
+ const inp=$('mInput'),ar=$('mArea');inp.hidden=!o.input;ar.hidden=!o.area;inp.value=o.value||'';inp.placeholder=o.placeholder||'';ar.value=o.area||'';
+ $('mOk').textContent=o.ok||'OK';$('mCancel').hidden=!!o.alert;$('mOk').style.background=o.danger?'#c62828':'';$('modal').hidden=false;
+ if(o.input)setTimeout(()=>{inp.focus();inp.select()},50);
+ const done=v=>{$('modal').hidden=true;$('mOk').onclick=$('mCancel').onclick=inp.onkeydown=null;res(v)};
+ $('mOk').onclick=()=>done(o.input?inp.value.trim():true);$('mCancel').onclick=()=>done(o.input?null:false);
+ inp.onkeydown=e=>{if(e.key==='Enter')$('mOk').click();if(e.key==='Escape')$('mCancel').click()}})}
+const uiAlert=(text,title)=>modal({title:title||'Heads up',text,alert:true});
+const uiConfirm=(text,ok,danger)=>modal({title:'Are you sure?',text,ok:ok||'Yes',danger});
+const uiPrompt=(title,value,placeholder,ok)=>modal({title,input:true,value,placeholder,ok:ok||'Save'});
+let toastT;function toast(t){const el=$('toast');el.textContent=t;el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,2500)}
+function flash(btn,label){if(!btn)return;const old=btn.dataset.label||btn.textContent;btn.dataset.label=old;btn.textContent=label;btn.classList.add('done');setTimeout(()=>{btn.textContent=old;btn.classList.remove('done')},2000)}
+function addPhotos(inp){photos.push(...inp.files);inp.value='';drawThumbs();makeCollage()}
+function clearPhotos(){photos=[];drawThumbs();$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent=''}
+function drawThumbs(){$('bThumbs').innerHTML='';photos.forEach(f=>{const i=document.createElement('img');i.src=URL.createObjectURL(f);$('bThumbs').appendChild(i)});$('bClear').hidden=!photos.length}
 async function loadImg(f){try{return await createImageBitmap(f)}catch(e){return await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=URL.createObjectURL(f)})}}
-async function makeCollage(){const files=[...$('bFiles').files];if(!files.length)return;$('bStatus').textContent='Making collage of '+files.length+' photo(s)...';
+async function makeCollage(){const files=photos;if(!files.length)return;$('bStatus').textContent='Making collage of '+files.length+' photo(s)...';
  try{const imgs=[];for(const f of files)imgs.push(await loadImg(f));
   const n=imgs.length,cols=Math.ceil(Math.sqrt(n)),rows=Math.ceil(n/cols),cell=Math.min(900,Math.floor(3000/cols)),pad=10;
   const c=$('bCanvas');c.width=cols*cell;c.height=rows*cell;const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);
@@ -397,18 +416,18 @@ async function makeCollage(){const files=[...$('bFiles').files];if(!files.length
   c.style.display='block';$('bBtns').hidden=false;
   $('bStatus').textContent='Collage ready ('+n+' photos)'+(n>25?'. Tip: with this many photos the dates get small, so you could split them into 2 batches.':'.')}
  catch(e){$('bStatus').textContent='Couldn\\'t read one of the photos: '+e.message}}
-async function copyCollage(){try{await navigator.clipboard.write([new ClipboardItem({'image/png':new Promise(r=>$('bCanvas').toBlob(r,'image/png'))})]);$('bStatus').textContent='Collage copied! Paste it into the AI.'}
+async function copyCollage(btn){try{await navigator.clipboard.write([new ClipboardItem({'image/png':new Promise(r=>$('bCanvas').toBlob(r,'image/png'))})]);flash(btn,'✓ Copied!');toast('✓ Collage copied, paste it into the AI');$('bStatus').textContent='Collage copied! Paste it into the AI.'}
  catch(e){$('bStatus').textContent='Your browser wouldn\\'t copy the picture, so use Download collage and upload it instead.'}}
 function downloadCollage(){const a=document.createElement('a');a.href=$('bCanvas').toDataURL('image/jpeg',0.9);a.download=(($('bFood').value||'food').replace(/[^a-z0-9]+/gi,'-'))+'-dates.jpg';a.click()}
-function aiPrompt(){const f=$('bFood').value.trim()||'food';return['This picture is a collage of '+$('bFiles').files.length+' numbered photos. Each photo shows the use-by or best-before date printed on the packaging of '+f+'.','',
+function aiPrompt(){const f=$('bFood').value.trim()||'food';return['This picture is a collage of '+photos.length+' numbered photos. Each photo shows the use-by or best-before date printed on the packaging of '+f+'.','',
  'Read the date in every photo and reply ONLY with lines in exactly this format, with no other text, headings or tables:',
  f+' | quantity | YYYY-MM-DD | notes','',
  'Rules:','- Make one line for each different date.','- quantity = how many photos show that same date.',
  '- Write dates as YYYY-MM-DD (year-month-day). If a photo only shows a month and year, use the last day of that month.',
  '- notes: write which photo numbers that line came from, e.g. photos 1, 4, 7.',
  '- If you cannot read a date, write a line like: '+f+' | 1 | UNKNOWN | photo 5'].join(NL)}
-async function copyPrompt(){const t=aiPrompt();try{await navigator.clipboard.writeText(t);$('bStatus').textContent='Instructions copied! Paste them into the AI along with the collage.'}
- catch(e){window.prompt('Copy these instructions:',t)}}
+async function copyPrompt(btn){const t=aiPrompt();try{await navigator.clipboard.writeText(t);flash(btn,'✓ Copied!');toast('✓ Instructions copied, paste them into the AI');$('bStatus').textContent='Instructions copied! Paste them into the AI along with the collage.'}
+ catch(e){modal({title:'Copy these instructions',text:'Your browser blocked copying, so press and hold to select all of this and copy it:',area:t,alert:true})}}
 function normDate(s){s=String(s||'').trim();let m;
  if(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s))return okDate(+s.slice(0,4),+s.slice(5,7),+s.slice(8,10));
  if(m=s.match(/^([0-9]{1,2})[./-]([0-9]{1,2})[./-]([0-9]{2,4})$/)){let y=+m[3];if(y<100)y+=2000;return okDate(y,+m[2],+m[1])}
@@ -425,8 +444,8 @@ function previewBulk(){const good=[],bad=[];
   (bad.length?'<p class="bad">Couldn\\'t read a date on '+bad.length+' line(s), these will be skipped:<br>'+bad.map(esc).join('<br>')+'</p>':'');
  $('bAdd').hidden=!good.length}
 async function addBulk(){try{const r=await api('groups/'+gid+'/items/bulk',{items:bulkRows});grp.items=r.items;draw();
- $('bPaste').value='';previewBulk();$('bFiles').value='';$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent='Added '+r.added+' line(s) to the list!'}
- catch(e){alert(e.message)}}
+ $('bPaste').value='';previewBulk();photos=[];drawThumbs();$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent='Added '+r.added+' line(s) to the list!'}
+ catch(e){uiAlert(e.message)}}
 async function saveAlerts(){await api('settings',{alerts:$('alerts').checked})}
 async function act(p,m){$('msg').textContent='...';try{await api(p,{});$('msg').textContent=m}catch(e){$('msg').textContent='Error: '+e.message}}
 async function logout(){await api('logout',{}).catch(()=>{});showAuth()}
