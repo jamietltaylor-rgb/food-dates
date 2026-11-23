@@ -33,8 +33,28 @@ export default {
         return json(items);
       }
 
+      if (url.pathname === "/api/emails" && req.method === "GET") return json(await loadEmails(env));
+
+      if (url.pathname === "/api/emails" && req.method === "POST") {
+        const { email } = await req.json();
+        const e = String(email || "").trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return json({ error: "That email doesn't look right" }, 400);
+        const list = await loadEmails(env);
+        if (!list.includes(e)) list.push(e);
+        await env.FOOD.put("emails", JSON.stringify(list));
+        return json(list);
+      }
+
+      if (url.pathname === "/api/emails/delete" && req.method === "POST") {
+        const { email } = await req.json();
+        const list = (await loadEmails(env)).filter(x => x !== email);
+        await env.FOOD.put("emails", JSON.stringify(list));
+        return json(list);
+      }
+
       if (url.pathname === "/api/test-email" && req.method === "POST") {
-        await sendMail(env, "Food tracker test", "If you can read this, email alerts are working.");
+        try { await sendMail(env, "Food tracker test", "If you can read this, email alerts are working."); }
+        catch (e) { return json({ error: e.message }, 500); }
         return json({ ok: true });
       }
 
@@ -73,20 +93,31 @@ async function checkDates(env) {
 }
 
 async function sendMail(env, subject, body) {
+  let to = await loadEmails(env);
+  if (!to.length && env.TO_EMAIL) to = [env.TO_EMAIL];
+  if (!to.length) throw new Error("No emails added yet");
+  if (!env.MAILER) throw new Error("Email sending isn't switched on yet");
   const domain = env.FROM_EMAIL.split("@")[1];
-  const raw = [
-    `From: Food Tracker <${env.FROM_EMAIL}>`,
-    `To: ${env.TO_EMAIL}`,
-    `Subject: ${subject}`,
-    `Message-ID: <${crypto.randomUUID()}@${domain}>`,
-    `Date: ${new Date().toUTCString()}`,
-    "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=utf-8",
-    "",
-    body,
-  ].join("\r\n");
-  await env.MAILER.send(new EmailMessage(env.FROM_EMAIL, env.TO_EMAIL, raw));
+  const failed = [];
+  for (const addr of to) {
+    const raw = [
+      `From: Food Tracker <${env.FROM_EMAIL}>`,
+      `To: ${addr}`,
+      `Subject: ${subject}`,
+      `Message-ID: <${crypto.randomUUID()}@${domain}>`,
+      `Date: ${new Date().toUTCString()}`,
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      body,
+    ].join("\r\n");
+    try { await env.MAILER.send(new EmailMessage(env.FROM_EMAIL, addr, raw)); }
+    catch (e) { failed.push(`${addr} (${e.message})`); }
+  }
+  if (failed.length === to.length) throw new Error("Couldn't send to: " + failed.join(", "));
 }
+
+const loadEmails = async env => JSON.parse((await env.FOOD.get("emails")) || "[]");
 
 const load = async env => JSON.parse((await env.FOOD.get("items")) || "[]");
 const save = (env, items) => env.FOOD.put("items", JSON.stringify(items));
@@ -126,6 +157,7 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
 <input name="notes" class="notes" placeholder="Notes (optional, e.g. top shelf)">
 <button>Add</button></form></div>
 <div class="card"><input id="search" placeholder="Search..." style="width:100%;margin-bottom:10px" oninput="draw()"><div id="list"></div></div>
+<div class="card"><b>Who gets the alert emails</b><div class="row" style="margin:10px 0"><input id="em" type="email" placeholder="you@example.com" style="flex:1"><button onclick="addEmail()">Add email</button></div><div id="emails"></div><small>Each new email gets a one-time verification email from Cloudflare first. Click the link in it to start getting alerts.</small></div>
 <div class="card row"><button class="ghost" onclick="act('test-email','Test email sent — check your inbox')">Send test email</button>
 <button class="ghost" onclick="act('check-now','Checked dates')">Check dates now</button>
 <button class="ghost" onclick="localStorage.removeItem('fpw');location.reload()">Log out</button><div id="msg"></div></div>
@@ -136,7 +168,11 @@ const api=(p,o={})=>fetch('/api/'+p,{...o,headers:{'content-type':'application/j
 function days(d){const t=new Date();t.setHours(0,0,0,0);return Math.round((new Date(d+'T00:00:00')-t)/864e5)}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function login(){pw=document.getElementById('pw').value||pw;try{items=await api('items');localStorage.setItem('fpw',pw);login_ok()}catch(e){document.getElementById('err').textContent=e.message}}
-function login_ok(){document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;draw()}
+let emails=[];
+function drawEmails(){document.getElementById('emails').innerHTML=emails.map(e=>'<div class="item"><div class="grow">'+esc(e)+'</div><button class="del" data-e="'+esc(e)+'" onclick="delEmail(this.dataset.e)">Remove</button></div>').join('')||'<p>No emails yet.</p>'}
+async function addEmail(){const i=document.getElementById('em');try{emails=await api('emails',{method:'POST',body:JSON.stringify({email:i.value})});i.value='';drawEmails()}catch(e){alert(e.message)}}
+async function delEmail(e){emails=await api('emails/delete',{method:'POST',body:JSON.stringify({email:e})});drawEmails()}
+function login_ok(){api('emails').then(e=>{emails=e;drawEmails()});document.getElementById('login').hidden=true;document.getElementById('app').hidden=false;draw()}
 function draw(){const q=document.getElementById('search').value.toLowerCase();
  const s=[...items].sort((a,b)=>a.date.localeCompare(b.date));let soon=0,gone=0;
  document.getElementById('list').innerHTML=s.filter(i=>i.name.toLowerCase().includes(q)).map(i=>{const d=days(i.date);
