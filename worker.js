@@ -23,13 +23,14 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "9";
+const VERSION = "10";
 
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const p = url.pathname;
-    if (p === "/icon.svg" || p === "/favicon.ico") return new Response(ICON_SVG, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
+    if (p === "/favicon.ico") return new Response(Uint8Array.from(atob(PNG["/icon-192.png"]), c => c.charCodeAt(0)), { headers: { "content-type": "image/png" } });
+    if (p === "/icon.svg") return new Response(ICON_SVG, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
     if (PNG[p] || p === "/apple-touch-icon-precomposed.png") return new Response(Uint8Array.from(atob(PNG[p] || PNG["/apple-touch-icon.png"]), c => c.charCodeAt(0)), { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
     if (p === "/manifest.webmanifest") return new Response(MANIFEST, { headers: { "content-type": "application/manifest+json" } });
     if (p === "/api/version") return new Response(JSON.stringify({ version: VERSION }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -273,7 +274,7 @@ const label = d => d < 0 ? `expired ${-d} days ago` : d === 0 ? "today" : `${d} 
 
 const HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Food Date Tracker</title>
-<link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#2f5d3a"><meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Food Dates"><meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -302,7 +303,7 @@ details.help{max-width:760px;margin:10px auto;text-align:left;background:#fff;bo
 details.help summary{cursor:pointer;font-weight:600;color:#2f5d3a}details.help h3{margin:14px 0 6px;font-size:15px}details.help ol{margin:0;padding-left:20px;line-height:1.6}
 .modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:#fff;border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2f5d3a;color:#fff;padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
 </style></head><body>
-<header><img src="/icon.svg" alt="" width="36" height="36" style="border-radius:8px"><h1>Food Date Tracker</h1><small id="who"></small></header><main>
+<header><img src="/icon-192.png" alt="" width="36" height="36" style="border-radius:8px"><h1>Food Date Tracker</h1><small id="who"></small></header><main>
 
 <div class="card" id="auth" hidden>
  <h2 id="authTitle">Log in</h2>
