@@ -96,9 +96,21 @@ async function sendMail(env, subject, body) {
   let to = await loadEmails(env);
   if (!to.length && env.TO_EMAIL) to = [env.TO_EMAIL];
   if (!to.length) throw new Error("No emails added yet");
+  const failed = [];
+  if (env.RESEND_KEY) {
+    for (const addr of to) {
+      const r = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.RESEND_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: `Food Tracker <${env.FROM_EMAIL}>`, to: [addr], subject, text: body }),
+      });
+      if (!r.ok) failed.push(`${addr} (${(await r.text()).slice(0, 120)})`);
+    }
+    if (failed.length === to.length) throw new Error("Couldn't send to: " + failed.join(", "));
+    return;
+  }
   if (!env.MAILER) throw new Error("Email sending isn't switched on yet");
   const domain = env.FROM_EMAIL.split("@")[1];
-  const failed = [];
   for (const addr of to) {
     const raw = [
       `From: Food Tracker <${env.FROM_EMAIL}>`,
@@ -157,7 +169,7 @@ button{background:#2f5d3a;color:#fff;border:0;cursor:pointer}button.ghost{backgr
 <input name="notes" class="notes" placeholder="Notes (optional, e.g. top shelf)">
 <button>Add</button></form></div>
 <div class="card"><input id="search" placeholder="Search..." style="width:100%;margin-bottom:10px" oninput="draw()"><div id="list"></div></div>
-<div class="card"><b>Who gets the alert emails</b><div class="row" style="margin:10px 0"><input id="em" type="email" placeholder="you@example.com" style="flex:1"><button onclick="addEmail()">Add email</button></div><div id="emails"></div><small>Each new email gets a one-time verification email from Cloudflare first. Click the link in it to start getting alerts.</small></div>
+<div class="card"><b>Who gets the alert emails</b><div class="row" style="margin:10px 0"><input id="em" type="email" placeholder="you@example.com" style="flex:1"><button onclick="addEmail()">Add email</button></div><div id="emails"></div><small>Anyone added here gets the alert emails.</small></div>
 <div class="card row"><button class="ghost" onclick="act('test-email','Test email sent — check your inbox')">Send test email</button>
 <button class="ghost" onclick="act('check-now','Checked dates')">Check dates now</button>
 <button class="ghost" onclick="localStorage.removeItem('fpw');location.reload()">Log out</button><div id="msg"></div></div>

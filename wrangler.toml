@@ -12,11 +12,11 @@ crons = ["0 8 * * *"]   # every day at 8am UTC
 binding = "FOOD"
 id = "3112216cc5084db281f5a921e3c25fdb"
 
-# Email binding is added once Cloudflare email is switched on (see README)
+# Emails are sent with Resend (secret RESEND_KEY) from alerts.jamietaylor.org
 # [[send_email]]
 # name = "MAILER"
 
 [vars]
-FROM_EMAIL = "food@jamietaylor.org"
+FROM_EMAIL = "food@alerts.jamietaylor.org"
 TO_EMAIL = "jamietltaylor@talktalk.net"
 # PASSWORD is a secret set in the Cloudflare dashboard
