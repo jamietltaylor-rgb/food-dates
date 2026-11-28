@@ -25,7 +25,7 @@ const MANIFEST = JSON.stringify({ name: "Food Date Tracker", short_name: "Food D
   background_color: "#f4f1ea", theme_color: "#2f5d3a",
   icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
           { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }] });
-const VERSION = "16";
+const VERSION = "17";
 const SESSION_TTL = 60 * 60 * 24 * 365; // stay logged in for a year, renewed whenever you use it
 
 export default {
@@ -132,6 +132,16 @@ export default {
           if (!body.name || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || "")) return err("Food name and date needed");
           g.items.push({ id: rand(8), name: String(body.name).slice(0, 100), qty: Math.max(1, Number(body.qty) || 1),
             date: body.date, notes: String(body.notes || "").slice(0, 200), by: me.name, mutedBy: [], sent: {} });
+          await putGroup(env, g); return ok(g.items);
+        }
+
+        if (sub === "/items/edit") {
+          const it = g.items.find(i => i.id === body.id);
+          if (!it) return err("That food isn't in the list any more");
+          if (!body.name || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || "")) return err("Food name and date needed");
+          if (it.date !== body.date) it.sent = {}; // new date, so reminders start fresh
+          it.name = String(body.name).slice(0, 100); it.qty = Math.max(1, Math.min(999, Number(body.qty) || 1));
+          it.date = body.date; it.notes = String(body.notes || "").slice(0, 200);
           await putGroup(env, g); return ok(g.items);
         }
 
@@ -404,7 +414,7 @@ button{background:var(--main);color:var(--on);border:0;cursor:pointer}button.gho
 .tabs button.on{background:var(--main);color:var(--on);border-color:var(--main)}
 details.help{max-width:760px;margin:10px auto;text-align:left;background:var(--card);border-radius:12px;padding:12px 16px;box-shadow:0 1px 3px #0002}
 details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.help h3{margin:14px 0 6px;font-size:15px}details.help ol{margin:0;padding-left:20px;line-height:1.6}
-.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--main);color:var(--on);padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
+.modal{position:fixed;inset:0;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}.modal[hidden]{display:none}.mbox{background:var(--card);border-radius:14px;padding:18px;width:100%;max-width:420px;box-shadow:0 10px 30px #0004}.mbox h3{margin:0 0 12px}.mbox label{display:block;font-weight:600;font-size:14px}.mbox label input{display:block;width:100%;margin:4px 0 6px;font-weight:normal}.mbox input,.mbox textarea{width:100%;margin-bottom:12px}.mbox .row{justify-content:flex-end}.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--main);color:var(--on);padding:12px 18px;border-radius:24px;box-shadow:0 4px 14px #0003;z-index:60;font-weight:600}.toast[hidden]{display:none}button.done{background:#3a9d4f!important;color:#fff!important}.thumbs{display:flex;gap:6px;flex-wrap:wrap}.thumbs img{width:56px;height:56px;object-fit:cover;border-radius:6px}@media(max-width:560px){form.add{grid-template-columns:1fr 70px}form.add .date{grid-column:1/3}}
 </style></head><body>
 <header><img src="/icon-192.png" alt="" width="36" height="36" style="border-radius:8px"><h1>Food Date Tracker</h1><small id="who"></small></header><main>
 
@@ -493,6 +503,10 @@ details.help summary{cursor:pointer;font-weight:600;color:var(--main)}details.he
 <div class="modal" id="modal" hidden><div class="mbox"><h3 id="mTitle"></h3><p id="mText"></p>
  <input id="mInput" hidden><textarea id="mArea" rows="8" hidden readonly></textarea>
  <div class="row"><button class="ghost" id="mCancel">Cancel</button><button id="mOk">OK</button></div></div></div>
+<div class="modal" id="editModal" hidden><div class="mbox"><h3>Edit food</h3>
+ <div class="col"><label>Food<input id="eName"></label><label>How many<input id="eQty" type="number" min="1"></label>
+ <label>Date<input id="eDate" type="date"></label><label>Notes<input id="eNotes" placeholder="Optional"></label></div>
+ <div class="row" style="margin-top:12px"><button class="ghost" id="eCancel">Cancel</button><button id="eSave">Save changes</button></div></div></div>
 <div class="toast" id="toast" hidden></div>
 </main>
 <footer style="text-align:center;padding:10px 16px 30px;color:var(--muted)">
@@ -538,7 +552,7 @@ function draw(){if(!grp)return;const q=$('search').value.toLowerCase();const ite
   const c=d<0?'gone':d<=7?'week':d<=warnD()?'soon':'';const muted=(i.mutedBy||[]).includes(me.email);
   const l=d<0?'Expired '+(-d)+' days ago':d===0?'Today!':d+' days left';
   const date=new Date(i.date+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
-  return '<div class="item '+c+'"><div class="grow"><b>'+esc(i.name)+'</b> ×'+i.qty+'<br><small>'+date+' · '+l+(i.notes?' · '+esc(i.notes):'')+(i.by?' · added by '+esc(i.by):'')+(muted?' · <b>emails off</b>':'')+'</small></div><button class="del" title="'+(muted?'Turn emails back on for this':'Stop emails for this')+'" data-id="'+i.id+'" onclick="muteItem(this.dataset.id,'+(!muted)+')">'+(muted?'🔕':'🔔')+'</button><button class="del" data-id="'+i.id+'" onclick="delItem(this.dataset.id)">✓ Eaten</button></div>'}).join('')||'<p>No food added yet.</p>';
+  return '<div class="item '+c+'"><div class="grow"><b>'+esc(i.name)+'</b> ×'+i.qty+'<br><small>'+date+' · '+l+(i.notes?' · '+esc(i.notes):'')+(i.by?' · added by '+esc(i.by):'')+(muted?' · <b>emails off</b>':'')+'</small></div><button class="del" title="'+(muted?'Turn emails back on for this':'Stop emails for this')+'" data-id="'+i.id+'" onclick="muteItem(this.dataset.id,'+(!muted)+')">'+(muted?'🔕':'🔔')+'</button><button class="del" title="Edit" data-id="'+i.id+'" onclick="editItem(this.dataset.id)">✏️</button><button class="del" data-id="'+i.id+'" onclick="delItem(this.dataset.id)">✓ Eaten</button></div>'}).join('')||'<p>No food added yet.</p>';
  items.forEach(i=>{const d=days(i.date);if(d<0)gone++;else if(d<=warnD())soon++});$('sSoonLbl').textContent='within '+WARNTXT[warnD()];
  sTotal.textContent=items.length;sSoon.textContent=soon;sGone.textContent=gone}
 function drawMembers(){const owner=grp.owner===me.email;
@@ -547,9 +561,18 @@ function drawMembers(){const owner=grp.owner===me.email;
   grp.invited.map(e=>'<div class="item person"><div class="grow">'+esc(e)+'<span class="tag">invited</span><br><small>Hasn\\'t signed up yet</small></div>'+
   (owner?'<button class="del" data-e="'+esc(e)+'" onclick="removeMember(this.dataset.e)">Cancel</button>':'')+'</div>').join('');
  $('leaveBtn').hidden=owner;$('delBtn').hidden=!owner}
-$('f').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);
- try{grp.items=await api('groups/'+gid+'/items',Object.fromEntries(f));e.target.reset();e.target.qty.value=1;draw();toast('✓ Added')}catch(x){uiAlert(x.message)}};
-async function delItem(id){grp.items=await api('groups/'+gid+'/items/delete',{id});draw();toast('✓ Ticked off as eaten')}
+let lastAdd=null;
+$('f').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const key=(f.get('name')||'').trim().toLowerCase()+'|'+f.get('date');
+ if(lastAdd===key&&!await uiConfirm('This is exactly the same food and date as the last thing you added. Did you forget to change it? Press Add again if you really do want another one.','Add again'))return;
+ try{lastAdd=key;grp.items=await api('groups/'+gid+'/items',Object.fromEntries(f));e.target.reset();e.target.qty.value=1;draw();toast('✓ Added')}catch(x){uiAlert(x.message)}};
+async function delItem(id){const it=grp.items.find(i=>i.id===id);if(!it)return;
+ if(!await uiConfirm('Tick off '+it.name+' ×'+it.qty+' as eaten? It will be taken off the list for everyone in the group.','Yes, it'+String.fromCharCode(39)+'s eaten'))return;
+ grp.items=await api('groups/'+gid+'/items/delete',{id});draw();toast('✓ Ticked off as eaten')}
+function editItem(id){const it=grp.items.find(i=>i.id===id);if(!it)return;
+ $('eName').value=it.name;$('eQty').value=it.qty;$('eDate').value=it.date;$('eNotes').value=it.notes||'';$('editModal').hidden=false;
+ const close=()=>{$('editModal').hidden=true;$('eSave').onclick=$('eCancel').onclick=null};
+ $('eCancel').onclick=close;
+ $('eSave').onclick=async()=>{try{grp.items=await api('groups/'+gid+'/items/edit',{id,name:$('eName').value.trim(),qty:$('eQty').value,date:$('eDate').value,notes:$('eNotes').value.trim()});close();draw();toast('✓ Changes saved')}catch(e){uiAlert(e.message)}}}
 async function addMember(){const el=$('addEm');try{const r=await api('groups/'+gid+'/members',{email:el.value});
  $('gMsg').textContent=(r.joined?'Added! ':'Invited — they\\'ll join when they sign up. ')+(r.emailed?'They\\'ve been emailed.':'(Couldn\\'t send them an email.)');el.value='';openGroup(gid)}catch(e){$('gMsg').textContent=e.message}}
 async function removeMember(e){if(!await uiConfirm('Remove '+e+' from this group?','Remove',true))return;await api('groups/'+gid+'/members/remove',{email:e});openGroup(gid)}
@@ -595,7 +618,7 @@ applyLook();
 const NL=String.fromCharCode(10);let bulkRows=[],photos=[];
 function modal(o){return new Promise(res=>{$('mTitle').textContent=o.title||'';$('mText').textContent=o.text||'';$('mText').hidden=!o.text;
  const inp=$('mInput'),ar=$('mArea');inp.hidden=!o.input;ar.hidden=!o.area;inp.value=o.value||'';inp.placeholder=o.placeholder||'';ar.value=o.area||'';
- $('mOk').textContent=o.ok||'OK';$('mCancel').hidden=!!o.alert;$('mOk').style.background=o.danger?'#c62828':'';$('modal').hidden=false;
+ $('mOk').textContent=o.ok||'OK';$('mCancel').textContent=o.cancel||'Cancel';$('mCancel').hidden=!!o.alert;$('mOk').style.background=o.danger?'#c62828':'';$('modal').hidden=false;
  if(o.input)setTimeout(()=>{inp.focus();inp.select()},50);
  const done=v=>{$('modal').hidden=true;$('mOk').onclick=$('mCancel').onclick=inp.onkeydown=null;res(v)};
  $('mOk').onclick=()=>done(o.input?inp.value.trim():true);$('mCancel').onclick=()=>done(o.input?null:false);
@@ -605,7 +628,12 @@ const uiConfirm=(text,ok,danger)=>modal({title:'Are you sure?',text,ok:ok||'Yes'
 const uiPrompt=(title,value,placeholder,ok)=>modal({title,input:true,value,placeholder,ok:ok||'Save'});
 let toastT;function toast(t){const el=$('toast');el.textContent=t;el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,2500)}
 function flash(btn,label){if(!btn)return;const old=btn.dataset.label||btn.textContent;btn.dataset.label=old;btn.textContent=label;btn.classList.add('done');setTimeout(()=>{btn.textContent=old;btn.classList.remove('done')},2000)}
-function addPhotos(inp){photos.push(...inp.files);inp.value='';drawThumbs();makeCollage()}
+async function addPhotos(inp){const files=[...inp.files];inp.value='';if(!files.length)return;
+ const last=localStorage.getItem('fLastBulk')||'',cur=$('bFood').value.trim();
+ if(!photos.length&&last&&cur.toLowerCase()===last.toLowerCase()){
+  const same=await modal({title:'Same food as last time?',text:'The food name is still "'+cur+'" from the last batch you added. Are these photos '+cur+' too?',ok:'Yes, '+cur,cancel:'No, change it'});
+  if(!same){$('bFood').focus();$('bFood').select();toast('Type the new food name, then pick the photos again');return}}
+ photos.push(...files);drawThumbs();makeCollage()}
 function clearPhotos(){photos=[];drawThumbs();$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent=''}
 function drawThumbs(){$('bThumbs').innerHTML='';photos.forEach(f=>{const i=document.createElement('img');i.src=URL.createObjectURL(f);$('bThumbs').appendChild(i)});$('bClear').hidden=!photos.length}
 async function loadImg(f){try{return await createImageBitmap(f)}catch(e){return await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=URL.createObjectURL(f)})}}
@@ -648,7 +676,7 @@ function previewBulk(){const good=[],bad=[];
  $('bPreview').innerHTML=(good.length?'<p><b>Ready to add '+good.length+' line(s), '+total+' item(s) in total:</b></p>'+good.map(g=>'<div class="item"><div class="grow"><b>'+esc(g.name)+'</b> ×'+g.qty+'<br><small>'+new Date(g.date+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})+(g.notes?' · '+esc(g.notes):'')+'</small></div></div>').join(''):'')+
   (bad.length?'<p class="bad">Couldn\\'t read a date on '+bad.length+' line(s), these will be skipped:<br>'+bad.map(esc).join('<br>')+'</p>':'');
  $('bAdd').hidden=!good.length}
-async function addBulk(){try{const r=await api('groups/'+gid+'/items/bulk',{items:bulkRows});grp.items=r.items;draw();
+async function addBulk(){try{const r=await api('groups/'+gid+'/items/bulk',{items:bulkRows});localStorage.setItem('fLastBulk',$('bFood').value.trim());grp.items=r.items;draw();
  $('bPaste').value='';previewBulk();photos=[];drawThumbs();$('bCanvas').style.display='none';$('bBtns').hidden=true;$('bStatus').textContent='Added '+r.added+' line(s) to the list!';toast('✓ Added '+r.added+' line(s)');showTab('food')}
  catch(e){uiAlert(e.message)}}
 const WARNTXT={7:'1 week',14:'2 weeks',30:'1 month',60:'2 months',90:'3 months',180:'6 months'};
